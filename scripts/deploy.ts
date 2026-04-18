@@ -13,6 +13,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { parse as parseJsonc } from 'jsonc-parser';
+import Cloudflare from 'cloudflare';
 
 const SECRET_KEYS = [
   'COOKIE_SIGNING_KEY',
@@ -53,6 +54,47 @@ function looksLikePlaceholder(value: string): boolean {
   return PLACEHOLDER_PATTERNS.some((re) => re.test(value));
 }
 
+/**
+ * Ensure the named AI Gateway exists for this account. Mirrors vibesdk's
+ * ensureAIGateway(): probes with a GET, 404-tolerant, creates on miss. The
+ * gateway is what `env.AI.gateway(name)` resolves against at runtime.
+ */
+async function ensureAIGateway(
+  cf: Cloudflare,
+  accountId: string,
+  gatewayName: string,
+): Promise<'exists' | 'created' | 'skipped'> {
+  const id = gatewayName.slice(0, 64);
+  try {
+    await cf.aiGateway.get(id, { account_id: accountId });
+    console.log(`  · AI Gateway "${id}" already exists`);
+    return 'exists';
+  } catch (err: any) {
+    if (err?.status !== 404) {
+      console.warn(`  · AI Gateway probe failed (non-fatal): ${err?.message ?? err}`);
+      return 'skipped';
+    }
+  }
+  try {
+    await cf.aiGateway.create({
+      account_id: accountId,
+      id,
+      cache_invalidate_on_update: true,
+      cache_ttl: 3600,
+      collect_logs: true,
+      rate_limiting_interval: 0,
+      rate_limiting_limit: 0,
+      rate_limiting_technique: 'sliding',
+      authentication: false,
+    });
+    console.log(`  · AI Gateway "${id}" created`);
+    return 'created';
+  } catch (err: any) {
+    console.warn(`  · AI Gateway create failed (non-fatal): ${err?.message ?? err}`);
+    return 'skipped';
+  }
+}
+
 function generateIfMissing(key: string): void {
   const existing = process.env[key];
   if (existing && !looksLikePlaceholder(existing)) return;
@@ -70,6 +112,18 @@ async function main() {
   if (!process.env.CLOUDFLARE_API_TOKEN) {
     console.error('CLOUDFLARE_API_TOKEN is required.');
     process.exit(1);
+  }
+
+  console.log('· Ensuring AI Gateway');
+  const wranglerPre = parseJsonc(readFileSync('wrangler.jsonc', 'utf8'));
+  const gatewayName = process.env.CLOUDFLARE_AI_GATEWAY ?? wranglerPre?.vars?.CLOUDFLARE_AI_GATEWAY ?? 'ranse';
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  if (accountId) {
+    const cf = new Cloudflare({ apiToken: process.env.CLOUDFLARE_API_TOKEN });
+    await ensureAIGateway(cf, accountId, gatewayName);
+  } else {
+    console.warn('  · CLOUDFLARE_ACCOUNT_ID not set — skipping AI Gateway provisioning.');
+    console.warn('    The Worker will fall back to direct provider URLs at runtime.');
   }
 
   console.log('· Preparing deploy-time secrets');

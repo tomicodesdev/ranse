@@ -77,4 +77,4 @@ If any check fails, fix it before going live — the wizard blocks completion.
 - use the default Workers AI path (leave `LLM_DEFAULT_MODEL` on a `workers-ai/*` model), or
 - add a provider key in **Settings → LLM providers (BYOK)**.
 
-**AI Gateway unification** — if you want unified analytics/fallback across providers, create an AI Gateway named `ranse` in the Cloudflare dashboard and set `CLOUDFLARE_AI_GATEWAY_URL` accordingly.
+**AI Gateway** — `scripts/deploy.ts` ensures an AI Gateway named `ranse` exists in your account (creates it with cache_ttl=3600, logs on, no rate limits by default). No manual step needed. To disable: set `CLOUDFLARE_AI_GATEWAY` to an empty string in `wrangler.jsonc` vars — the LLM dispatcher then falls back to direct provider URLs.
