@@ -1,29 +1,25 @@
-# Ranse environment — copy to .dev.vars for local dev, or fill these in
-# during the Deploy-to-Cloudflare prompts.
+# Ranse build-time secrets.
 #
-# IMPORTANT: leave COOKIE_SIGNING_KEY, ADMIN_BOOTSTRAP_TOKEN, and any API
-# keys BLANK here. `bun run setup` generates strong random values locally;
-# `bun run deploy` generates them at deploy time. If you paste weak values
-# here, they'll be prefilled for every future install of your fork.
+# Every KEY listed here becomes a Worker Secret (write-only, encrypted).
+# Runtime configuration (APP_URL, ADMIN_EMAIL, SUPPORT_DOMAIN, gateway
+# name, etc.) lives in wrangler.jsonc `vars`, NOT here — otherwise the
+# Deploy-to-Cloudflare UI prompts for the same key in two places.
+#
+# IMPORTANT: leave these blank. `bun run setup` fills them locally;
+# `bun run deploy` generates strong random values at deploy time.
 
-APP_URL=
-ADMIN_EMAIL=
-SUPPORT_DOMAIN=
-
-# Session + bootstrap — generated automatically, do not prefill.
+# Session + first-admin bootstrap (auto-generated if blank).
 COOKIE_SIGNING_KEY=
 ADMIN_BOOTSTRAP_TOKEN=
 
-# LLM — leave unset to default to Workers AI via the `AI` binding.
-# Set any one of these to enable the corresponding provider.
-# Format: "provider/model-id" in LLM_DEFAULT_MODEL.
+# LLM providers (BYOK). Leave all blank to use Workers AI via the `AI`
+# binding; set any one to enable that provider.
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GOOGLE_AI_STUDIO_API_KEY=
 GROK_API_KEY=
 OPENROUTER_API_KEY=
 
-# AI Gateway (optional — enables unified analytics + fallback)
-CLOUDFLARE_AI_GATEWAY=ranse
+# AI Gateway auth token (optional — only needed if the gateway has
+# authentication enabled; Ranse's auto-provisioned gateway does not).
 CLOUDFLARE_AI_GATEWAY_TOKEN=
-CLOUDFLARE_AI_GATEWAY_URL=none
