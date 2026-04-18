@@ -1,7 +1,8 @@
 import type { Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import type { Env } from '../env';
-import { hmacSign, hmacVerify, randomToken, sha256Hex } from './crypto';
+import { hashPassword as hashPw, verifyPassword as verifyPw } from './password';
+import { hmacSign, hmacVerify } from './crypto';
 import { ids } from './ids';
 
 const COOKIE_NAME = 'ranse_session';
@@ -66,15 +67,5 @@ export async function requireUser(c: Context<{ Bindings: Env }>): Promise<Sessio
   return s;
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  const salt = randomToken(16);
-  const hash = await sha256Hex(`${salt}:${password}`);
-  return `${salt}:${hash}`;
-}
-
-export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const check = await sha256Hex(`${salt}:${password}`);
-  return hmacVerify(hash, check);
-}
+export const hashPassword = hashPw;
+export const verifyPassword = verifyPw;

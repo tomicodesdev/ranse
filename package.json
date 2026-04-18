@@ -20,6 +20,8 @@
     "db:migrate:local": "wrangler d1 migrations apply ranse-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply ranse-db --remote",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "biome lint src scripts",
     "format": "biome format --write src scripts",
     "cf-typegen": "wrangler types"
@@ -43,6 +45,7 @@
     "jsonc-parser": "^3.3.1",
     "typescript": "^5.7.3",
     "vite": "^6.0.7",
+    "vitest": "^2.1.8",
     "wrangler": "^3.99.0"
   },
   "engines": {

@@ -77,6 +77,10 @@
 
   "send_email": [{ "name": "EMAIL" }],
 
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
   "unsafe": {
     "bindings": [
       {

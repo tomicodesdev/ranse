@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { deleteCookie } from 'hono/cookie';
 import type { Env } from '../env';
 import { createSession, getSession, setSessionCookie, verifyPassword } from '../lib/auth';
+import { hashPassword, needsRehash } from '../lib/password';
 
 export const authApp = new Hono<{ Bindings: Env }>();
 
@@ -20,6 +21,11 @@ authApp.post('/login', async (c) => {
 
   const ok = await verifyPassword(body.password, user.password_hash);
   if (!ok) return c.json({ error: 'invalid_credentials' }, 401);
+
+  if (needsRehash(user.password_hash)) {
+    const fresh = await hashPassword(body.password);
+    await c.env.DB.prepare(`UPDATE user SET password_hash = ? WHERE id = ?`).bind(fresh, user.id).run();
+  }
 
   const ws = await c.env.DB.prepare(
     `SELECT workspace_id FROM workspace_user WHERE user_id = ? ORDER BY created_at ASC LIMIT 1`,

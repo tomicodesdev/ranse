@@ -1,7 +1,13 @@
 import { Hono } from 'hono';
 import { routeAgentRequest } from 'agents';
-import type { ExecutionContext, ForwardableEmailMessage, MessageBatch } from '@cloudflare/workers-types';
+import type {
+  ExecutionContext,
+  ForwardableEmailMessage,
+  MessageBatch,
+  ScheduledController,
+} from '@cloudflare/workers-types';
 import type { Env } from './env';
+import { runSLASweep } from './jobs/sla-sweep';
 import { parseInbound } from './email/parsing';
 import { resolveMailboxForRecipients } from './email/routing';
 import { r2Keys, putRaw } from './lib/storage';
@@ -95,6 +101,20 @@ export default {
       env.WorkspaceSupervisorAgent.idFromName(routed.workspaceId),
     );
     await (supervisorStub as any).ingestEmail(payload);
+  },
+
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    switch (controller.cron) {
+      case '*/5 * * * *':
+        ctx.waitUntil(
+          runSLASweep(env)
+            .then((r) => console.log('sla-sweep', r))
+            .catch((e) => console.error('sla-sweep failed', e)),
+        );
+        break;
+      default:
+        console.warn('unhandled cron', controller.cron);
+    }
   },
 
   async queue(batch: MessageBatch, env: Env, _ctx: ExecutionContext): Promise<void> {

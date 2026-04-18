@@ -24,7 +24,9 @@ Every outbound reply from the AI is gated. The flow:
 
 ## Escalations
 
-The `EscalationAgent` runs on demand (Phase 3: automatic on specific triggers). It returns `{ should_escalate, severity, route_to }` and the operator (or an automation rule) picks the handoff target.
+The `EscalationAgent` runs on demand. It returns `{ should_escalate, severity, route_to }` and the operator (or an automation rule) picks the handoff target.
+
+An **SLA sweep** runs every 5 minutes via a Cron Trigger (`*/5 * * * *`). It walks every workspace, computes first-response / resolution breaches against `DEFAULT_SLA`, and writes a dedup'd `ticket.sla_breached.{first_response|resolution}` audit event the first time each threshold is crossed. Surface these in your own dashboard by querying `audit_event WHERE action LIKE 'ticket.sla_breached.%'`.
 
 ## Rotating secrets
 
