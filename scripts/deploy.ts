@@ -170,9 +170,18 @@ async function main() {
     run(`wrangler secret bulk ${prodVarsPath}`);
   }
 
-  console.log('\n✓ Deploy complete.');
-  console.log('  Next: open your Worker URL and finish the /setup wizard.');
-  console.log(`  Your setup token is ADMIN_SETUP_TOKEN — check .prod.vars.`);
+  const setupToken = process.env.ADMIN_SETUP_TOKEN ?? '';
+  const bar = '━'.repeat(72);
+  console.log(`\n${bar}`);
+  console.log('  ✓ DEPLOY COMPLETE — SAVE THIS VALUE NOW');
+  console.log(bar);
+  console.log('\n  ADMIN_SETUP_TOKEN (one-time use at /setup):\n');
+  console.log(`    ${setupToken}\n`);
+  console.log('  You will NOT be able to retrieve this from the dashboard later');
+  console.log('  (Cloudflare secrets are write-only). If you lose it, rotate it:\n');
+  console.log('    wrangler secret put ADMIN_SETUP_TOKEN\n');
+  console.log('  Then visit the Worker URL and finish the /setup wizard.');
+  console.log(`${bar}\n`);
 }
 
 main().catch((err) => {

@@ -52,12 +52,29 @@ export function SetupView({ onDone }: { onDone: () => void }) {
               <input
                 value={form.setup_token}
                 onChange={(e) => setForm({ ...form, setup_token: e.target.value })}
-                placeholder="From ADMIN_SETUP_TOKEN secret"
+                placeholder="Paste your ADMIN_SETUP_TOKEN"
                 required
               />
-              <span className="muted">
-                This is the <code>ADMIN_SETUP_TOKEN</code> value you set during deploy — single-use.
-              </span>
+              <div className="muted" style={{ marginTop: 6, lineHeight: 1.55 }}>
+                <strong>Where to find it:</strong>
+                <ol style={{ margin: '4px 0 0 0', paddingLeft: 20 }}>
+                  <li>
+                    Open the <strong>deploy build log</strong> in Cloudflare (Workers &amp; Pages
+                    → your Worker → Deployments → the latest build) — the token is printed in a
+                    banner at the end of the log.
+                  </li>
+                  <li>
+                    If the log is gone, rotate from a terminal:
+                    <br />
+                    <code style={{ display: 'inline-block', marginTop: 2 }}>
+                      wrangler secret put ADMIN_SETUP_TOKEN
+                    </code>
+                  </li>
+                </ol>
+                <p style={{ marginTop: 6 }}>
+                  One-time use — stops working the moment this wizard finishes.
+                </p>
+              </div>
             </div>
             <div className="field">
               <label>Workspace name</label>

@@ -23,8 +23,18 @@ There are two supported install paths: **one-click deploy** (recommended) and **
 
 ### After deploy
 
-- Grab `ADMIN_SETUP_TOKEN` from Cloudflare → your Worker → Settings → Variables and Secrets. **You need it once** to create the first admin.
-- Finish the `/setup` wizard (admin account → mailbox → verification).
+**Grab your `ADMIN_SETUP_TOKEN`** — you need it once at `/setup` to create the first admin.
+
+Where to find it:
+
+1. **Deploy build log** (preferred) — Cloudflare dashboard → Workers & Pages → your Worker → Deployments → open the latest build. `scripts/deploy.ts` prints the token in a banner at the end of the log.
+2. **If the log is gone**, Worker secrets are write-only (the dashboard shows the name but not the value). Rotate to a value you pick:
+   ```bash
+   wrangler secret put ADMIN_SETUP_TOKEN
+   # paste any value — it's only needed once
+   ```
+
+Then finish the `/setup` wizard (admin account → mailbox → verification). The token stops working the moment setup completes.
 
 ## Path B — Manual Wrangler
 
@@ -69,7 +79,7 @@ If any check fails, fix it before going live — the wizard blocks completion.
 
 ## Troubleshooting
 
-**"invalid_setup_token"** — double-check the value from your Worker's secrets; it's a one-time use.
+**"invalid_setup_token"** — the value was auto-generated at deploy time. Find it in the deploy build log (Cloudflare → Workers → your Worker → Deployments → latest) or rotate with `wrangler secret put ADMIN_SETUP_TOKEN`. It's one-time use.
 
 **Email arrives but no ticket appears** — check Worker logs. Confirm the `support@` address is routed to the `ranse` Worker. Confirm the same address is registered as a mailbox in Ranse.
 
