@@ -37,5 +37,5 @@ ADMIN_SETUP_TOKEN=${randomHex(16)}
 `;
 
 writeFileSync(path, contents, { mode: 0o600 });
-console.log(`✓ wrote ${path} with localhost overrides + generated secrets`);
+console.log(`✓ wrote ${path} with generated secrets`);
 console.log('  Next: bun run db:migrate:local && bun run dev');
