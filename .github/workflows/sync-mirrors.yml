@@ -1,0 +1,42 @@
+name: Sync mirrors
+
+# Mirrors every push to getranse/ranse:main into downstream repos that
+# Cloudflare created via the Deploy-to-Cloudflare button. Each mirror
+# gets force-pushed so its history stays byte-identical with upstream;
+# downstream repos should not carry independent commits.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: sync-mirrors
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - tomicodesdev/ranse-support
+          # add more downstream mirrors here as you create them
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to ${{ matrix.target }}
+        env:
+          TOKEN: ${{ secrets.MIRROR_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "MIRROR_SYNC_TOKEN secret is not set — skipping."
+            exit 1
+          fi
+          git push --force-with-lease \
+            "https://x-access-token:${TOKEN}@github.com/${{ matrix.target }}.git" \
+            HEAD:main
