@@ -2,13 +2,21 @@
 /**
  * Ranse deploy orchestrator. Runs under `bun scripts/deploy.ts`.
  *
- * Cloudflare's Deploy-to-Cloudflare button invokes the npm "deploy" script with
- * CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID injected. This script:
- *   1. Validates required env.
- *   2. Writes .prod.vars from env (for wrangler secret bulk).
- *   3. Runs `wrangler deploy`.
- *   4. Applies D1 migrations to the remote database.
- *   5. Bulk-uploads secrets that aren't safe to ship as `vars`.
+ * Cloudflare's Deploy-to-Cloudflare button invokes the npm "deploy" script
+ * with CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID injected, plus
+ * WRANGLER_CI_OVERRIDE_NAME = the Worker script name the user picked. The
+ * Deploy button auto-provisions resources (D1, KV, R2, queues) on the very
+ * first deploy and prefixes them with the Worker name; subsequent
+ * Workers Builds runs do NOT auto-provision, so this script does the
+ * equivalent work itself, idempotently:
+ *
+ *   1. Validate required env.
+ *   2. Resolve effective Worker name from WRANGLER_CI_OVERRIDE_NAME (or
+ *      WORKER_NAME, or wrangler.jsonc `name`).
+ *   3. Look up / create D1, KV, R2, queues using `${workerName}-{kind}`.
+ *   4. Write a deploy-time wrangler.deploy.jsonc with real IDs + final names.
+ *   5. Build, then `wrangler deploy --config wrangler.deploy.jsonc`.
+ *   6. Apply D1 migrations, push secrets.
  */
 import { execSync } from 'node:child_process';
 import { existsSync, writeFileSync, readFileSync } from 'node:fs';
@@ -25,6 +33,8 @@ const SECRET_KEYS = [
   'OPENROUTER_API_KEY',
   'CEREBRAS_API_KEY',
 ];
+
+const DEPLOY_CONFIG_PATH = 'wrangler.deploy.jsonc';
 
 function run(cmd: string, opts: { allowFail?: boolean } = {}) {
   console.log(`\n$ ${cmd}`);
@@ -94,6 +104,52 @@ async function ensureAIGateway(
   }
 }
 
+async function ensureD1(cf: Cloudflare, accountId: string, name: string): Promise<string> {
+  for await (const db of cf.d1.database.list({ account_id: accountId })) {
+    if (db.name === name && db.uuid) {
+      console.log(`  · D1 "${name}" exists (uuid: ${db.uuid})`);
+      return db.uuid;
+    }
+  }
+  const created = await cf.d1.database.create({ account_id: accountId, name });
+  if (!created.uuid) throw new Error(`D1 create returned no uuid for "${name}"`);
+  console.log(`  · D1 "${name}" created (uuid: ${created.uuid})`);
+  return created.uuid;
+}
+
+async function ensureKV(cf: Cloudflare, accountId: string, title: string): Promise<string> {
+  for await (const ns of cf.kv.namespaces.list({ account_id: accountId })) {
+    if (ns.title === title) {
+      console.log(`  · KV "${title}" exists (id: ${ns.id})`);
+      return ns.id;
+    }
+  }
+  const created = await cf.kv.namespaces.create({ account_id: accountId, title });
+  console.log(`  · KV "${title}" created (id: ${created.id})`);
+  return created.id;
+}
+
+async function ensureR2(cf: Cloudflare, accountId: string, name: string): Promise<void> {
+  const list = await cf.r2.buckets.list({ account_id: accountId });
+  if (list.buckets?.some((b) => b.name === name)) {
+    console.log(`  · R2 bucket "${name}" exists`);
+    return;
+  }
+  await cf.r2.buckets.create({ account_id: accountId, name });
+  console.log(`  · R2 bucket "${name}" created`);
+}
+
+async function ensureQueue(cf: Cloudflare, accountId: string, queueName: string): Promise<void> {
+  for await (const q of cf.queues.list({ account_id: accountId })) {
+    if (q.queue_name === queueName) {
+      console.log(`  · Queue "${queueName}" exists`);
+      return;
+    }
+  }
+  await cf.queues.create({ account_id: accountId, queue_name: queueName });
+  console.log(`  · Queue "${queueName}" created`);
+}
+
 function generateIfMissing(key: string): void {
   const existing = process.env[key];
   if (existing && !looksLikePlaceholder(existing)) return;
@@ -107,25 +163,100 @@ function generateIfMissing(key: string): void {
   );
 }
 
+/**
+ * Worker name source order:
+ *   1. WRANGLER_CI_OVERRIDE_NAME — set by Workers Builds CI to the script
+ *      name the user picked at Deploy-to-Cloudflare time.
+ *   2. WORKER_NAME — manual override for self-hosted CI / local prod deploys.
+ *   3. wrangler.jsonc `name` — the OSS template default.
+ */
+function resolveWorkerName(templateName: string): string {
+  return (
+    process.env.WRANGLER_CI_OVERRIDE_NAME ||
+    process.env.WORKER_NAME ||
+    templateName
+  );
+}
+
+/**
+ * Provision missing resources, then write a deploy-time wrangler.deploy.jsonc
+ * with real IDs + Worker-name-prefixed resource names.
+ *
+ * Naming rule: every resource that uses the template's worker-name prefix
+ * (`{templateName}-...`) gets rewritten to `{workerName}-...`. Resources
+ * without that prefix are left alone.
+ */
+async function provisionAndPatchConfig(
+  cf: Cloudflare,
+  accountId: string,
+  workerName: string,
+): Promise<{ configPath: string; dbName?: string }> {
+  const wrangler = parseJsonc(readFileSync('wrangler.jsonc', 'utf8')) as any;
+  const templateName: string = wrangler.name;
+  const sub = (s: string) =>
+    s.startsWith(`${templateName}-`)
+      ? `${workerName}-${s.slice(templateName.length + 1)}`
+      : s === templateName
+        ? workerName
+        : s;
+
+  let dbName: string | undefined;
+  for (const db of (wrangler.d1_databases ?? []) as any[]) {
+    db.database_name = sub(db.database_name);
+    db.database_id = await ensureD1(cf, accountId, db.database_name);
+    dbName = db.database_name;
+  }
+
+  // KV: the template puts a friendly placeholder in `id` (e.g. "ranse-cache").
+  // We treat that as the namespace title, look up / create, then store the
+  // real namespace id back into `id` for wrangler.
+  for (const kv of (wrangler.kv_namespaces ?? []) as any[]) {
+    const title = sub(kv.id);
+    kv.id = await ensureKV(cf, accountId, title);
+  }
+
+  for (const r2 of (wrangler.r2_buckets ?? []) as any[]) {
+    r2.bucket_name = sub(r2.bucket_name);
+    await ensureR2(cf, accountId, r2.bucket_name);
+  }
+
+  for (const p of (wrangler.queues?.producers ?? []) as any[]) {
+    p.queue = sub(p.queue);
+    await ensureQueue(cf, accountId, p.queue);
+  }
+  for (const c of (wrangler.queues?.consumers ?? []) as any[]) {
+    c.queue = sub(c.queue);
+  }
+
+  wrangler.name = workerName;
+
+  writeFileSync(DEPLOY_CONFIG_PATH, JSON.stringify(wrangler, null, 2));
+  console.log(`  · Wrote ${DEPLOY_CONFIG_PATH} (worker name: ${workerName})`);
+  return { configPath: DEPLOY_CONFIG_PATH, dbName };
+}
+
 async function main() {
   if (!process.env.CLOUDFLARE_API_TOKEN) {
     console.error('CLOUDFLARE_API_TOKEN is required.');
     process.exit(1);
   }
+  if (!process.env.CLOUDFLARE_ACCOUNT_ID) {
+    console.error('CLOUDFLARE_ACCOUNT_ID is required.');
+    process.exit(1);
+  }
+
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const cf = new Cloudflare({ apiToken: process.env.CLOUDFLARE_API_TOKEN });
 
   console.log('· Ensuring AI Gateway');
   // Gateway name is hardcoded in src/llm/core.ts (GATEWAY_NAME) — keep the
-  // literal in sync here. We don't read it from env so it never appears as
-  // a redundant Deploy-UI prompt.
-  const gatewayName = 'ranse';
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  if (accountId) {
-    const cf = new Cloudflare({ apiToken: process.env.CLOUDFLARE_API_TOKEN });
-    await ensureAIGateway(cf, accountId, gatewayName);
-  } else {
-    console.warn('  · CLOUDFLARE_ACCOUNT_ID not set — skipping AI Gateway provisioning.');
-    console.warn('    The Worker will fall back to direct provider URLs at runtime.');
-  }
+  // literal in sync here.
+  await ensureAIGateway(cf, accountId, 'ranse');
+
+  const templateConfig = parseJsonc(readFileSync('wrangler.jsonc', 'utf8')) as any;
+  const workerName = resolveWorkerName(templateConfig.name);
+  console.log(`· Provisioning resources for Worker "${workerName}"`);
+  const { configPath, dbName } = await provisionAndPatchConfig(cf, accountId, workerName);
 
   console.log('· Preparing deploy-time secrets');
   generateIfMissing('COOKIE_SIGNING_KEY');
@@ -144,16 +275,16 @@ async function main() {
     run('bun run build');
   }
 
-  run('wrangler deploy');
+  run(`wrangler deploy --config ${configPath}`);
 
-  // D1 migrations — idempotent; wrangler handles already-applied migrations.
-  const wrangler = parseJsonc(readFileSync('wrangler.jsonc', 'utf8'));
-  const dbName = wrangler?.d1_databases?.[0]?.database_name ?? 'ranse-db';
-  run(`wrangler d1 migrations apply ${dbName} --remote`, { allowFail: false });
+  if (dbName) {
+    run(`wrangler d1 migrations apply ${dbName} --config ${configPath} --remote`, {
+      allowFail: false,
+    });
+  }
 
-  // Push secrets (skip if none)
   if (secretsPresent.length > 0) {
-    run(`wrangler secret bulk ${prodVarsPath}`);
+    run(`wrangler secret bulk ${prodVarsPath} --config ${configPath}`);
   }
 
   const setupToken = process.env.ADMIN_SETUP_TOKEN ?? '';
