@@ -134,13 +134,35 @@ export async function addDnsRecord(token: string, zoneId: string, record: Sendin
 }
 
 export async function enableEmailRouting(token: string, zoneId: string) {
-  const status = await cfFetch<{ enabled: boolean; status?: string }>(
-    `/zones/${zoneId}/email/routing`,
-    { method: 'GET', token },
-  ).catch(() => ({ enabled: false }) as any);
-  if (status.enabled) return { alreadyEnabled: true };
-  await cfFetch<any>(`/zones/${zoneId}/email/routing/enable`, { method: 'POST', token });
-  return { alreadyEnabled: false };
+  // Probe current state. The GET endpoint may itself 10000 on some accounts;
+  // when it does, fall through to the POST and let that be the authority.
+  let probed: { enabled?: boolean; status?: string } | null = null;
+  try {
+    probed = await cfFetch<{ enabled?: boolean; status?: string }>(
+      `/zones/${zoneId}/email/routing`,
+      { method: 'GET', token },
+    );
+  } catch {
+    // ignore — we'll attempt the enable POST below
+  }
+  const enabled =
+    probed?.enabled === true ||
+    probed?.status === 'ready' ||
+    probed?.status === 'enabled';
+  if (enabled) return { alreadyEnabled: true };
+
+  try {
+    await cfFetch<any>(`/zones/${zoneId}/email/routing/enable`, { method: 'POST', token });
+    return { alreadyEnabled: false };
+  } catch (err: any) {
+    // 10000 here often means "already enabled" — the API doesn't expose a
+    // friendly idempotent response. Treat any auth-shaped error as
+    // "probably already enabled"; downstream rule creation will surface a
+    // real problem if routing genuinely isn't on.
+    const code = err?.cfErrors?.[0]?.code;
+    if (code === 10000 || code === 1000) return { alreadyEnabled: true };
+    throw err;
+  }
 }
 
 export async function createRoutingRule(
@@ -239,6 +261,8 @@ export async function applyProvisioning(input: ProvisionInput): Promise<Provisio
 
   let added = 0;
   let skipped = 0;
+  let routingManaged = 0;
+  const routingManagedRecords: string[] = [];
   const failures: string[] = [];
   for (const r of dnsRecords) {
     try {
@@ -246,15 +270,39 @@ export async function applyProvisioning(input: ProvisionInput): Promise<Provisio
       added++;
     } catch (err: any) {
       const msg = String(err.message ?? err);
-      if (/already exists|duplicate/i.test(msg)) skipped++;
-      else failures.push(`${r.type} ${r.name}: ${msg}`);
+      if (/already exists|duplicate/i.test(msg)) {
+        skipped++;
+      } else if (/managed by Email Routing/i.test(msg)) {
+        // Email Routing claims ownership of the entire zone's MX records,
+        // including subdomain MX (like cf-bounce.<zone> for Email Sending
+        // bounces). We can't write these while Routing is enabled — note
+        // them as a soft warning rather than a hard failure. Sending still
+        // works without bounce-handling MX; the user can add them by hand
+        // if they want bounce processing.
+        routingManaged++;
+        routingManagedRecords.push(`${r.type} ${r.name} → ${r.content}`);
+      } else {
+        failures.push(`${r.type} ${r.name}: ${msg}`);
+      }
     }
   }
+  const parts = [`${added} added`];
+  if (skipped) parts.push(`${skipped} already present`);
+  if (routingManaged) parts.push(`${routingManaged} skipped (managed by Email Routing)`);
+  if (failures.length) parts.push(`${failures.length} failed`);
   steps.push({
     id: 'dns-add',
-    label: `DNS records: ${added} added, ${skipped} already present${failures.length ? `, ${failures.length} failed` : ''}`,
+    label: `DNS records: ${parts.join(', ')}`,
     status: failures.length ? 'fail' : 'ok',
-    message: failures.join('\n') || undefined,
+    message:
+      [
+        failures.length ? `Failed:\n${failures.join('\n')}` : '',
+        routingManaged
+          ? `Email Routing manages this zone's MX records, so these bounce-handling MX entries from Email Sending could not be written. Sending will still work; bounces won't be auto-processed. To add them anyway: temporarily disable Email Routing, add the records, re-enable.\n\n${routingManagedRecords.join('\n')}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n') || undefined,
     dns_records: dnsRecords,
   });
 
