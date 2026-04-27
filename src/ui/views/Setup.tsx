@@ -250,7 +250,7 @@ export function SetupView({ onDone }: { onDone: () => void }) {
               <p className="muted" style={{ fontSize: 12 }}>
                 Required token permissions:{' '}
                 <strong>
-                  Account · Email Sending: Edit, Zone · Zone: Read, Zone · DNS: Edit, Zone · Email Routing Rules: Edit
+                  Zone · Email Sending: Edit, Zone · Zone: Read, Zone · DNS: Edit, Zone · Email Routing Rules: Edit
                 </strong>
                 .{' '}
                 <a

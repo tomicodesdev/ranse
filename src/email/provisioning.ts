@@ -1,8 +1,16 @@
 /**
- * Cloudflare Email provisioning — onboards a domain for Email Sending,
- * adds DKIM/SPF/DMARC records, enables Email Routing, and routes a
- * single address at a named Worker. All requests go through direct
- * `fetch` against api.cloudflare.com with a user-supplied scoped token.
+ * Cloudflare Email provisioning — onboards a sending subdomain via the
+ * `/zones/:zone_id/email/sending/subdomains` API, adds DKIM/SPF/DMARC
+ * records, enables Email Routing, and routes a single address at a named
+ * Worker. All requests go through direct `fetch` against api.cloudflare.com
+ * with a user-supplied scoped token.
+ *
+ * Note: Cloudflare's Email Sending API is *zone-scoped* (despite many
+ * Cloudflare APIs being account-scoped). The required token permission is
+ * "Zone · Email Sending: Edit" — NOT "Account · Email Sending: Edit", which
+ * is why earlier attempts using `/accounts/:account_id/email/sending/...`
+ * failed with `10001: Unable to authenticate request` even when the account
+ * permission was granted.
  */
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -64,22 +72,35 @@ export async function findZone(token: string, domain: string) {
   return null;
 }
 
-export async function onboardSendingDomain(token: string, accountId: string, domain: string) {
-  try {
-    const existing = await cfFetch<any>(
-      `/accounts/${accountId}/email/sending/domains/${encodeURIComponent(domain)}`,
-      { method: 'GET', token },
-    );
-    return { created: false, domain: existing };
-  } catch (err: any) {
-    if (err?.status !== 404) throw err;
-  }
-  const created = await cfFetch<any>(`/accounts/${accountId}/email/sending/domains`, {
-    method: 'POST',
-    token,
-    body: { name: domain },
-  });
-  return { created: true, domain: created };
+export interface SendingSubdomain {
+  tag: string;
+  name: string;
+  enabled?: boolean;
+  dkim_selector?: string;
+}
+
+/**
+ * Idempotently ensure a sending subdomain exists. The Cloudflare API exposes
+ * `GET /subdomains/:tag` (not by name), so we list-and-match-by-name to find
+ * an existing one before creating.
+ */
+export async function onboardSendingDomain(
+  token: string,
+  zoneId: string,
+  name: string,
+): Promise<{ created: boolean; subdomain: SendingSubdomain }> {
+  const list = await cfFetch<SendingSubdomain[]>(
+    `/zones/${zoneId}/email/sending/subdomains`,
+    { method: 'GET', token },
+  ).catch(() => [] as SendingSubdomain[]);
+  const found = list.find((s) => s.name === name);
+  if (found) return { created: false, subdomain: found };
+
+  const created = await cfFetch<SendingSubdomain>(
+    `/zones/${zoneId}/email/sending/subdomains`,
+    { method: 'POST', token, body: { name } },
+  );
+  return { created: true, subdomain: created };
 }
 
 export interface SendingDnsRecord {
@@ -92,11 +113,11 @@ export interface SendingDnsRecord {
 
 export async function getSendingDnsRecords(
   token: string,
-  accountId: string,
-  domain: string,
+  zoneId: string,
+  tag: string,
 ): Promise<SendingDnsRecord[]> {
   const res = await cfFetch<any>(
-    `/accounts/${accountId}/email/sending/domains/${encodeURIComponent(domain)}/dns`,
+    `/zones/${zoneId}/email/sending/subdomains/${tag}/dns`,
     { method: 'GET', token },
   );
   // Endpoint shape varies in beta — accept both {records: [...]} and [...] directly.
@@ -178,26 +199,33 @@ export async function applyProvisioning(input: ProvisionInput): Promise<Provisio
     return steps;
   }
 
+  // Zone is required for *both* sending and routing — the sending API is
+  // zone-scoped now, not account-scoped — so fail-fast if the domain isn't
+  // on this Cloudflare account.
   const zone = await findZone(input.apiToken, input.domain).catch(() => null);
-  if (zone) {
-    steps.push({ id: 'zone', label: `Zone "${zone.zoneName}" found on Cloudflare`, status: 'ok' });
-  } else {
+  if (!zone) {
     steps.push({
       id: 'zone',
-      label: `Zone not on Cloudflare — DNS records will be returned for manual setup`,
-      status: 'skipped',
+      label: `Zone for "${input.domain}" not found on this Cloudflare account`,
+      status: 'fail',
+      message:
+        'Cloudflare Email Sending and Email Routing both require the domain to be a zone on this account. Add the domain at dash.cloudflare.com → Add a site, then retry.',
     });
+    return steps;
   }
+  steps.push({ id: 'zone', label: `Zone "${zone.zoneName}" found on Cloudflare`, status: 'ok' });
 
   let dnsRecords: SendingDnsRecord[] = [];
   try {
-    const result = await onboardSendingDomain(input.apiToken, input.accountId, input.domain);
+    const result = await onboardSendingDomain(input.apiToken, zone.zoneId, input.domain);
     steps.push({
       id: 'sending',
-      label: result.created ? `Sending domain "${input.domain}" onboarded` : `Sending domain "${input.domain}" already onboarded`,
+      label: result.created
+        ? `Sending domain "${input.domain}" onboarded`
+        : `Sending domain "${input.domain}" already onboarded`,
       status: 'ok',
     });
-    dnsRecords = await getSendingDnsRecords(input.apiToken, input.accountId, input.domain);
+    dnsRecords = await getSendingDnsRecords(input.apiToken, zone.zoneId, result.subdomain.tag);
     steps.push({
       id: 'dns-fetch',
       label: `Fetched ${dnsRecords.length} DNS records (DKIM / SPF / DMARC)`,
@@ -209,72 +237,55 @@ export async function applyProvisioning(input: ProvisionInput): Promise<Provisio
     return steps;
   }
 
-  if (zone) {
-    let added = 0;
-    let skipped = 0;
-    const failures: string[] = [];
-    for (const r of dnsRecords) {
-      try {
-        await addDnsRecord(input.apiToken, zone.zoneId, r);
-        added++;
-      } catch (err: any) {
-        const msg = String(err.message ?? err);
-        if (/already exists|duplicate/i.test(msg)) skipped++;
-        else failures.push(`${r.type} ${r.name}: ${msg}`);
-      }
+  let added = 0;
+  let skipped = 0;
+  const failures: string[] = [];
+  for (const r of dnsRecords) {
+    try {
+      await addDnsRecord(input.apiToken, zone.zoneId, r);
+      added++;
+    } catch (err: any) {
+      const msg = String(err.message ?? err);
+      if (/already exists|duplicate/i.test(msg)) skipped++;
+      else failures.push(`${r.type} ${r.name}: ${msg}`);
     }
-    steps.push({
-      id: 'dns-add',
-      label: `DNS records: ${added} added, ${skipped} already present${failures.length ? `, ${failures.length} failed` : ''}`,
-      status: failures.length ? 'fail' : 'ok',
-      message: failures.join('\n') || undefined,
-      dns_records: dnsRecords,
-    });
-  } else {
-    steps.push({
-      id: 'dns-add',
-      label: 'Add these DNS records at your registrar',
-      status: 'skipped',
-      dns_records: dnsRecords,
-    });
   }
+  steps.push({
+    id: 'dns-add',
+    label: `DNS records: ${added} added, ${skipped} already present${failures.length ? `, ${failures.length} failed` : ''}`,
+    status: failures.length ? 'fail' : 'ok',
+    message: failures.join('\n') || undefined,
+    dns_records: dnsRecords,
+  });
 
-  if (zone) {
-    try {
-      const er = await enableEmailRouting(input.apiToken, zone.zoneId);
-      steps.push({
-        id: 'routing',
-        label: er.alreadyEnabled ? 'Email Routing already enabled' : 'Email Routing enabled',
-        status: 'ok',
-      });
-    } catch (err: any) {
-      steps.push({ id: 'routing', label: 'Enable Email Routing', status: 'fail', message: err.message });
-      return steps;
-    }
-
-    try {
-      const rule = await createRoutingRule(
-        input.apiToken,
-        zone.zoneId,
-        input.mailboxAddress,
-        input.workerName,
-      );
-      steps.push({
-        id: 'rule',
-        label: rule.created
-          ? `Routing rule created: ${input.mailboxAddress} → ${input.workerName}`
-          : `Routing rule already present: ${input.mailboxAddress}`,
-        status: 'ok',
-      });
-    } catch (err: any) {
-      steps.push({ id: 'rule', label: 'Create routing rule', status: 'fail', message: err.message });
-    }
-  } else {
+  try {
+    const er = await enableEmailRouting(input.apiToken, zone.zoneId);
     steps.push({
       id: 'routing',
-      label: 'Email Routing — set up manually at the registrar zone',
-      status: 'skipped',
+      label: er.alreadyEnabled ? 'Email Routing already enabled' : 'Email Routing enabled',
+      status: 'ok',
     });
+  } catch (err: any) {
+    steps.push({ id: 'routing', label: 'Enable Email Routing', status: 'fail', message: err.message });
+    return steps;
+  }
+
+  try {
+    const rule = await createRoutingRule(
+      input.apiToken,
+      zone.zoneId,
+      input.mailboxAddress,
+      input.workerName,
+    );
+    steps.push({
+      id: 'rule',
+      label: rule.created
+        ? `Routing rule created: ${input.mailboxAddress} → ${input.workerName}`
+        : `Routing rule already present: ${input.mailboxAddress}`,
+      status: 'ok',
+    });
+  } catch (err: any) {
+    steps.push({ id: 'rule', label: 'Create routing rule', status: 'fail', message: err.message });
   }
 
   return steps;
