@@ -1,25 +1,30 @@
 /**
- * Cloudflare Email provisioning — enables Email Routing on the zone and
- * creates a single address-to-Worker routing rule. All requests go through
- * direct `fetch` against api.cloudflare.com with a user-supplied scoped
- * token.
+ * Cloudflare Email provisioning — verifies Email Routing is on for the
+ * zone (the user must enable it once via the dashboard), then creates a
+ * single address-to-Worker routing rule. All requests go through direct
+ * `fetch` against api.cloudflare.com with a user-supplied scoped token.
  *
- * Why no Email Sending: Cloudflare explicitly forbids Email Sending and
- * Email Routing on the same zone ("No other email services can be active
- * in the domain you are configuring." — developers.cloudflare.com/email-
- * routing/get-started/enable-email-routing/). For the OSS template's
- * single-domain default, Routing is the right choice — inbound to the
- * Worker is the load-bearing capability. Outbound replies go through
- * the Worker's `send_email` binding without needing Email Sending
- * onboarding. Users who specifically want DKIM-signed custom-domain
- * outbound can opt-in by setting Email Sending up on a separate
- * delegated zone — that's documented separately and not run by this
- * wizard.
+ * Why we don't enable Email Routing programmatically: empirically, both
+ * GET /zones/:id/email/routing and POST /zones/:id/email/routing/enable
+ * return 10000 ("Authentication error") for ANY API token, regardless of
+ * scopes. Neither the documented "Email Routing Rules: Edit" (zone) nor
+ * "Email Routing Addresses: Edit" (account) authorizes them. The
+ * dashboard's "Onboard Domain" button uses session OAuth with broader
+ * internal scopes not available to API tokens. So we detect routing
+ * state via the MX records Routing installs (`*.mx.cloudflare.net`) and
+ * point the user at the dashboard if it isn't on yet.
+ *
+ * Why no Email Sending step: Cloudflare forbids Email Sending and
+ * Email Routing on the same zone ("No other email services can be
+ * active in the domain you are configuring."). Outbound replies go
+ * through the Worker's `send_email` binding without needing Email
+ * Sending onboarding. Users who specifically want DKIM-signed
+ * custom-domain outbound can set Email Sending up on a separate
+ * delegated zone manually.
  *
  * Helper functions for Email Sending (onboardSendingDomain,
- * getSendingDnsRecords) are kept exported below for any opt-in caller
- * that wants them, but the default applyProvisioning flow does not
- * touch them.
+ * getSendingDnsRecords) remain exported below for any opt-in caller,
+ * but the default applyProvisioning flow doesn't touch them.
  */
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -142,44 +147,32 @@ export async function addDnsRecord(token: string, zoneId: string, record: Sendin
   });
 }
 
-export async function enableEmailRouting(token: string, zoneId: string) {
-  // Probe current state. If the GET fails, surface the error rather than
-  // silently falling through — earlier "tolerance" here masked real auth
-  // failures and reported the zone as enabled when it wasn't.
-  let probed: { enabled?: boolean; status?: string } | null = null;
-  try {
-    probed = await cfFetch<{ enabled?: boolean; status?: string }>(
-      `/zones/${zoneId}/email/routing`,
-      { method: 'GET', token },
-    );
-  } catch (err: any) {
-    // GET requires Email Routing Addresses: Read (account scope) on most
-    // accounts. If it 10000s, fall through to POST and let that be the
-    // authority; a 10000 there means we genuinely don't have permission.
-    if (err?.cfErrors?.[0]?.code !== 10000) throw err;
-  }
-  const enabled =
-    probed?.enabled === true ||
-    probed?.status === 'ready' ||
-    probed?.status === 'enabled';
-  if (enabled) return { alreadyEnabled: true };
-
-  try {
-    await cfFetch<any>(`/zones/${zoneId}/email/routing/enable`, { method: 'POST', token });
-    return { alreadyEnabled: false };
-  } catch (err: any) {
-    const code = err?.cfErrors?.[0]?.code;
-    if (code === 10000) {
-      throw new Error(
-        'Token cannot enable Email Routing. The /email/routing/enable endpoint ' +
-          'requires "Account · Email Routing Addresses: Edit" — not just ' +
-          '"Zone · Email Routing Rules: Edit". Recreate the token with that ' +
-          'permission added, or click "Onboard Domain" in the Cloudflare ' +
-          'dashboard (Email → Email Routing) to enable manually.',
-      );
-    }
-    throw err;
-  }
+/**
+ * Detect whether Email Routing is enabled on a zone by checking for
+ * Cloudflare's routing MX records (`*.mx.cloudflare.net`). When Routing is
+ * enabled, Cloudflare adds three of these records automatically.
+ *
+ * Why not GET /zones/:id/email/routing? Empirically, that endpoint (and
+ * POST /enable) is gated by an undocumented permission that no API token
+ * UI exposes — neither Email Routing Rules: Edit nor Email Routing
+ * Addresses: Edit authorize it. Both return 10000 regardless of token
+ * scopes. The dashboard's "Onboard Domain" button works because the
+ * dashboard uses session OAuth with broader internal scopes that aren't
+ * available to API tokens.
+ *
+ * DNS:Read (or Zone:Read on some accounts) is grantable, so we infer the
+ * routing state from the MX records that Routing's enable flow installs.
+ */
+export async function detectEmailRouting(
+  token: string,
+  zoneId: string,
+): Promise<{ enabled: boolean }> {
+  const records = await cfFetch<Array<{ type: string; content: string }>>(
+    `/zones/${zoneId}/dns_records?type=MX&per_page=20`,
+    { method: 'GET', token },
+  );
+  const enabled = records.some((r) => /\.mx\.cloudflare\.net\.?$/i.test(r.content));
+  return { enabled };
 }
 
 export async function createRoutingRule(
@@ -253,45 +246,36 @@ export async function applyProvisioning(input: ProvisionInput): Promise<Provisio
   }
   steps.push({ id: 'zone', label: `Zone "${zone.zoneName}" found on Cloudflare`, status: 'ok' });
 
-  // Cloudflare forbids Email Routing on a zone that has Email Sending active.
-  // If a sending subdomain exists, we can't enable Routing — surface a
-  // pointer to the un-onboard step rather than letting /enable 10000 with
-  // an opaque "Authentication error" later on.
+  // Email Routing must be enabled by the user via the Cloudflare dashboard
+  // — programmatic enable is not possible (see file header). Detect state
+  // via the *.mx.cloudflare.net MX records that Routing's onboard flow
+  // installs.
+  let routingEnabled = false;
   try {
-    const sending = await cfFetch<SendingSubdomain[]>(
-      `/zones/${zone.zoneId}/email/sending/subdomains`,
-      { method: 'GET', token: input.apiToken },
-    ).catch(() => [] as SendingSubdomain[]);
-    if (sending.length > 0) {
-      const names = sending.map((s) => s.name).join(', ');
-      steps.push({
-        id: 'conflict',
-        label: 'Email Sending is active on this zone — must be removed first',
-        status: 'fail',
-        message:
-          `Cloudflare does not allow Email Sending and Email Routing on the same zone. Found Email Sending subdomain(s): ${names}.\n\n` +
-          `To unblock setup, delete the sending subdomain in the Cloudflare dashboard (Email → Email Sending → click the domain → Delete), or via API:\n\n` +
-          `    curl -X DELETE -H "Authorization: Bearer <token>" \\\n      https://api.cloudflare.com/client/v4/zones/${zone.zoneId}/email/sending/subdomains/<subdomain_id>\n\n` +
-          `Once cleared, Retry this step. (Ranse uses the Worker's send_email binding for outbound replies — Email Sending onboarding is not required.)`,
-      });
-      return steps;
-    }
-  } catch {
-    // Token may lack Email Sending: Read; ignore — if Sending IS active and
-    // we can't see it, /enable will surface the conflict anyway.
-  }
-
-  try {
-    const er = await enableEmailRouting(input.apiToken, zone.zoneId);
+    routingEnabled = (await detectEmailRouting(input.apiToken, zone.zoneId)).enabled;
+  } catch (err: any) {
     steps.push({
       id: 'routing',
-      label: er.alreadyEnabled ? 'Email Routing already enabled' : 'Email Routing enabled',
-      status: 'ok',
+      label: 'Detect Email Routing state',
+      status: 'fail',
+      message: err.message,
     });
-  } catch (err: any) {
-    steps.push({ id: 'routing', label: 'Enable Email Routing', status: 'fail', message: err.message });
     return steps;
   }
+  if (!routingEnabled) {
+    steps.push({
+      id: 'routing',
+      label: 'Email Routing is not enabled on this zone',
+      status: 'fail',
+      message:
+        `Email Routing has to be enabled in the Cloudflare dashboard (it can't be enabled via API tokens — Cloudflare gates the /email/routing/enable endpoint behind an internal permission that no token UI exposes).\n\n` +
+        `Open: https://dash.cloudflare.com/?to=/:account/email/email-routing\n` +
+        `Click "Onboard Domain" for ${input.domain}, accept Cloudflare's MX records, then return here and click Retry.\n\n` +
+        `Once Routing is on, this wizard will create the support-mailbox routing rule via API automatically.`,
+    });
+    return steps;
+  }
+  steps.push({ id: 'routing', label: 'Email Routing is enabled', status: 'ok' });
 
   try {
     const rule = await createRoutingRule(

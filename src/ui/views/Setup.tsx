@@ -245,12 +245,12 @@ export function SetupView({ onDone }: { onDone: () => void }) {
                 Auto-configure Cloudflare (optional)
               </summary>
               <p className="muted" style={{ marginTop: 8 }}>
-                Paste a scoped API token and Ranse will enable Email Routing on the zone and create a rule that forwards <code>{mailbox.address || 'your mailbox'}</code> to this Worker. Outbound replies use the Worker's <code>send_email</code> binding — no separate Email Sending setup required. Token is used once and not stored.
+                Email Routing has to be enabled once via the Cloudflare dashboard (Cloudflare doesn't expose a token-callable API for that step). Paste a scoped API token and Ranse will verify Routing is on and create a rule that forwards <code>{mailbox.address || 'your mailbox'}</code> to this Worker. Outbound replies use the Worker's <code>send_email</code> binding — no separate Email Sending setup required. Token is used once and not stored.
               </p>
               <p className="muted" style={{ fontSize: 12 }}>
                 Required token permissions:{' '}
                 <strong>
-                  Account · Email Routing Addresses: Edit, Zone · Email Routing Rules: Edit, Zone · Zone: Read
+                  Zone · Zone: Read, Zone · DNS: Read, Zone · Email Routing Rules: Edit
                 </strong>
                 .{' '}
                 <a
