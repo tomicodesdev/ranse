@@ -26,7 +26,10 @@ export const MODELS_MASTER: Record<string, ModelSpec> = {
     provider: 'workers-ai',
     contextSize: 128_000,
     nonReasoning: true,
-    directOverride: true,
+    // directOverride was true here previously but that pointed the OpenAI SDK
+    // at AI Gateway's /workers-ai endpoint, which is Cloudflare's native API
+    // shape — not OpenAI chat.completions. Routing through /compat instead
+    // lets the gateway translate the OpenAI-format request to Workers AI.
     supportsTools: true,
     supportsJsonSchema: true,
   },
@@ -34,7 +37,6 @@ export const MODELS_MASTER: Record<string, ModelSpec> = {
     provider: 'workers-ai',
     contextSize: 128_000,
     nonReasoning: true,
-    directOverride: true,
     supportsTools: true,
     supportsJsonSchema: true,
   },

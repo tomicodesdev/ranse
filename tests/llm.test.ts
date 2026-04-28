@@ -31,10 +31,15 @@ describe('MODELS_MASTER', () => {
     }
   });
 
-  it('workers-ai entries have directOverride (gateway compat does not cover them)', () => {
+  it('workers-ai entries do NOT set directOverride (gateway /compat handles them)', () => {
+    // Earlier the assumption was that Workers AI needed the direct gateway
+    // endpoint, but empirically /workers-ai is Cloudflare's native API
+    // shape — not OpenAI chat.completions. We route Workers AI through
+    // /compat (same as every other provider) and pass the full
+    // workers-ai/<model> name so the gateway dispatches correctly.
     for (const [key, spec] of Object.entries(MODELS_MASTER)) {
       if (spec.provider === 'workers-ai') {
-        expect(spec.directOverride, `${key} must set directOverride`).toBe(true);
+        expect(spec.directOverride ?? false, `${key} must NOT set directOverride`).toBe(false);
       }
     }
   });

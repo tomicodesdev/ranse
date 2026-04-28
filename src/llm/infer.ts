@@ -41,6 +41,11 @@ async function callOnce<T extends z.ZodTypeAny>(
     modelName,
   } as any);
 
+  // /compat endpoint of AI Gateway requires `provider/model` format so it
+  // knows which provider to dispatch to. Direct provider endpoints (e.g.
+  // /openai with OPENAI_API_KEY) just want the bare model name.
+  const apiModelName = spec.directOverride ? modelId : `${spec.provider}/${modelId}`;
+
   const messages = [
     { role: 'system' as const, content: params.system },
     { role: 'user' as const, content: params.user },
@@ -49,7 +54,7 @@ async function callOnce<T extends z.ZodTypeAny>(
   if (params.schema && spec.supportsJsonSchema) {
     const { zodResponseFormat } = await import('openai/helpers/zod.mjs');
     const completion = await client.chat.completions.parse({
-      model: modelId,
+      model: apiModelName,
       messages,
       temperature: cfg.temperature,
       max_completion_tokens: cfg.maxTokens,
@@ -62,7 +67,7 @@ async function callOnce<T extends z.ZodTypeAny>(
   }
 
   const completion = await client.chat.completions.create({
-    model: modelId,
+    model: apiModelName,
     messages,
     temperature: cfg.temperature,
     max_completion_tokens: cfg.maxTokens,
