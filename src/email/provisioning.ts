@@ -1,30 +1,27 @@
 /**
- * Cloudflare Email provisioning — verifies Email Routing is on for the
- * zone (the user must enable it once via the dashboard), then creates a
- * single address-to-Worker routing rule. All requests go through direct
- * `fetch` against api.cloudflare.com with a user-supplied scoped token.
+ * Cloudflare Email provisioning. Two-zone architecture:
  *
- * Why we don't enable Email Routing programmatically: empirically, both
- * GET /zones/:id/email/routing and POST /zones/:id/email/routing/enable
- * return 10000 ("Authentication error") for ANY API token, regardless of
- * scopes. Neither the documented "Email Routing Rules: Edit" (zone) nor
- * "Email Routing Addresses: Edit" (account) authorizes them. The
- * dashboard's "Onboard Domain" button uses session OAuth with broader
- * internal scopes not available to API tokens. So we detect routing
- * state via the MX records Routing installs (`*.mx.cloudflare.net`) and
- * point the user at the dashboard if it isn't on yet.
+ *   Apex zone (e.g. getranse.com)         → Email Routing (inbound to Worker)
+ *   Sending subdomain zone (e.g. mail.X)  → Email Sending (outbound DKIM-signed)
  *
- * Why no Email Sending step: Cloudflare forbids Email Sending and
- * Email Routing on the same zone ("No other email services can be
- * active in the domain you are configuring."). Outbound replies go
- * through the Worker's `send_email` binding without needing Email
- * Sending onboarding. Users who specifically want DKIM-signed
- * custom-domain outbound can set Email Sending up on a separate
- * delegated zone manually.
+ * Cloudflare forbids Email Sending and Email Routing on the same zone
+ * ("No other email services can be active in the domain you are
+ * configuring."). Two zones get us full functionality: customers email
+ * support@<apex>, replies/proactive sends are DKIM-signed via
+ * mail.<apex>, and DMARC alignment is "relaxed" since both share the
+ * organizational domain.
  *
- * Helper functions for Email Sending (onboardSendingDomain,
- * getSendingDnsRecords) remain exported below for any opt-in caller,
- * but the default applyProvisioning flow doesn't touch them.
+ * Why we don't enable Email Routing programmatically: both GET
+ * /zones/:id/email/routing and POST /zones/:id/email/routing/enable
+ * return 10000 ("Authentication error") for ANY API token, regardless
+ * of scopes. The dashboard uses session OAuth with broader internal
+ * scopes that aren't available to tokens. We detect Routing state via
+ * the *.mx.cloudflare.net MX records the onboard flow installs, and
+ * point the user at the dashboard for the one-time Routing onboard.
+ *
+ * Why we ask the user to delegate mail.<apex> as a separate zone:
+ * Cloudflare's same-zone email-services exclusivity rule. The wizard
+ * surfaces clear instructions if the subdomain isn't a zone yet.
  */
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -276,6 +273,91 @@ export async function applyProvisioning(input: ProvisionInput): Promise<Provisio
     return steps;
   }
   steps.push({ id: 'routing', label: 'Email Routing is enabled', status: 'ok' });
+
+  // Email Sending lives on a delegated subdomain (mail.<apex>) because
+  // Cloudflare forbids Sending and Routing on the same zone. We expect
+  // the user to have added mail.<apex> as a separate zone in Cloudflare
+  // (Add a site → mail.<apex> → delegate NS to Cloudflare). If that
+  // hasn't happened, surface clear instructions instead of failing
+  // opaquely.
+  const sendingDomain = `mail.${input.domain}`;
+  const sendingZone = await findZone(input.apiToken, sendingDomain).catch(() => null);
+  if (!sendingZone || sendingZone.zoneName !== sendingDomain) {
+    steps.push({
+      id: 'sending-zone',
+      label: `Sending subdomain zone "${sendingDomain}" not found on Cloudflare`,
+      status: 'fail',
+      message:
+        `Outbound mail uses a separate Cloudflare zone for the sending subdomain so DKIM/SPF/DMARC records don't conflict with Email Routing on the apex.\n\n` +
+        `1. Open: https://dash.cloudflare.com/?to=/:account/add-site\n` +
+        `2. Enter: ${sendingDomain}\n` +
+        `3. Pick the Free plan (or whatever you have), accept Cloudflare's nameservers\n` +
+        `4. Add NS records for ${sendingDomain} pointing to those nameservers — at the parent ${input.domain} zone (Cloudflare → DNS → add 2 NS records) or at your registrar if ${input.domain} isn't on Cloudflare\n` +
+        `5. Wait for the new zone to show "active" status in the dashboard, then come back here and click Retry.`,
+    });
+    return steps;
+  }
+  steps.push({
+    id: 'sending-zone',
+    label: `Sending subdomain zone "${sendingDomain}" found`,
+    status: 'ok',
+  });
+
+  let sendingDnsRecords: SendingDnsRecord[] = [];
+  try {
+    const result = await onboardSendingDomain(input.apiToken, sendingZone.zoneId, sendingDomain);
+    steps.push({
+      id: 'sending-onboard',
+      label: result.created
+        ? `Email Sending onboarded on "${sendingDomain}"`
+        : `Email Sending already onboarded on "${sendingDomain}"`,
+      status: 'ok',
+    });
+    sendingDnsRecords = await getSendingDnsRecords(
+      input.apiToken,
+      sendingZone.zoneId,
+      result.subdomain.tag,
+    );
+    steps.push({
+      id: 'sending-dns-fetch',
+      label: `Fetched ${sendingDnsRecords.length} DKIM/SPF/DMARC records`,
+      status: 'ok',
+      dns_records: sendingDnsRecords,
+    });
+  } catch (err: any) {
+    steps.push({
+      id: 'sending-onboard',
+      label: 'Onboard Email Sending',
+      status: 'fail',
+      message: err.message,
+    });
+    return steps;
+  }
+
+  let added = 0;
+  let alreadyPresent = 0;
+  const sendingDnsFailures: string[] = [];
+  for (const r of sendingDnsRecords) {
+    try {
+      await addDnsRecord(input.apiToken, sendingZone.zoneId, r);
+      added++;
+    } catch (err: any) {
+      const msg = String(err.message ?? err);
+      if (/already exists|duplicate/i.test(msg)) alreadyPresent++;
+      else sendingDnsFailures.push(`${r.type} ${r.name}: ${msg}`);
+    }
+  }
+  const sendingParts = [`${added} added`];
+  if (alreadyPresent) sendingParts.push(`${alreadyPresent} already present`);
+  if (sendingDnsFailures.length) sendingParts.push(`${sendingDnsFailures.length} failed`);
+  steps.push({
+    id: 'sending-dns-add',
+    label: `Sending DNS records: ${sendingParts.join(', ')}`,
+    status: sendingDnsFailures.length ? 'fail' : 'ok',
+    message: sendingDnsFailures.length ? sendingDnsFailures.join('\n') : undefined,
+    dns_records: sendingDnsRecords,
+  });
+  if (sendingDnsFailures.length) return steps;
 
   try {
     const rule = await createRoutingRule(

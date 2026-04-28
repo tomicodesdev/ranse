@@ -245,12 +245,12 @@ export function SetupView({ onDone }: { onDone: () => void }) {
                 Auto-configure Cloudflare (optional)
               </summary>
               <p className="muted" style={{ marginTop: 8 }}>
-                Email Routing has to be enabled once via the Cloudflare dashboard (Cloudflare doesn't expose a token-callable API for that step). Paste a scoped API token and Ranse will verify Routing is on and create a rule that forwards <code>{mailbox.address || 'your mailbox'}</code> to this Worker. Outbound replies use the Worker's <code>send_email</code> binding — no separate Email Sending setup required. Token is used once and not stored.
+                Two-zone setup: <strong>{mailbox.address ? mailbox.address.split('@')[1] : 'your-domain.com'}</strong> handles inbound via Email Routing → Worker; <strong>mail.{mailbox.address ? mailbox.address.split('@')[1] : 'your-domain.com'}</strong> handles outbound via Email Sending (DKIM-signed). Routing must be enabled once via the Cloudflare dashboard (no API for that step), and the sending subdomain must be a separate Cloudflare zone (Add a site → <code>mail.{mailbox.address ? mailbox.address.split('@')[1] : 'your-domain.com'}</code>). The wizard tells you exactly what to do if either piece is missing. Token is used once and not stored.
               </p>
               <p className="muted" style={{ fontSize: 12 }}>
                 Required token permissions:{' '}
                 <strong>
-                  Zone · Zone: Read, Zone · DNS: Read, Zone · Email Routing Rules: Edit
+                  Account · Email Sending: Edit, Zone · Zone: Read, Zone · DNS: Read, Zone · DNS: Edit, Zone · Email Routing Rules: Edit
                 </strong>
                 .{' '}
                 <a
