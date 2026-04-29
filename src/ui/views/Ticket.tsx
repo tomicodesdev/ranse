@@ -120,17 +120,15 @@ export function TicketView({ id, onBack }: { id: string; onBack: () => void }) {
                 try {
                   const res = await API.draftWithAI(id);
                   if (!res.ok) throw new Error(res.error || 'Draft failed');
-                  // Draft posts to approvals queue async; show note + reload after a tick.
-                  setTimeout(async () => {
-                    setDrafting(false);
-                    await load();
-                  }, 1500);
+                  if (res.body) setReply(res.body);
+                  if (res.subject) setReplySubject(res.subject);
                 } catch (err: any) {
                   setError(err.message || 'Draft failed');
+                } finally {
                   setDrafting(false);
                 }
               }}
-              title="Generate an AI-suggested draft. Lands in the approvals queue for you to review."
+              title="Generate an AI suggestion for this reply. Populates the textarea — review and edit before sending."
             >
               {drafting ? 'Drafting…' : 'Suggest with AI'}
             </button>

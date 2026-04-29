@@ -89,7 +89,7 @@ apiApp.post('/tickets/:id/reply', async (c) => {
 apiApp.post('/tickets/:id/draft', async (c) => {
   const s = c.get('session');
   const stub = await getSupervisor(c.env, s.workspaceId);
-  const result = await (stub as any).draftWithAI({ ticketId: c.req.param('id'), actorUserId: s.userId });
+  const result = await (stub as any).draftReply({ ticketId: c.req.param('id'), actorUserId: s.userId });
   return c.json(result);
 });
 

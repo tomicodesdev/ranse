@@ -599,75 +599,65 @@ export class WorkspaceSupervisorAgent extends Agent<Env, SupervisorState> {
   }
 
   /**
-   * Operator-initiated AI draft. Queues triageAndDraft for a single ticket
-   * regardless of the workspace/ticket auto-draft setting. The result still
-   * lands in the approvals queue — the human reviews + approves before
-   * anything is sent.
+   * Operator-initiated AI draft, SYNCHRONOUS. Calls the LLM in-band and
+   * returns the suggested subject/body so the UI can populate the
+   * compose-reply textarea. Operator edits + sends via replyDirect.
+   *
+   * Distinct from the auto-draft flow (triageAndDraft → approval card),
+   * which is for hands-off "AI handles it, human just clicks approve"
+   * teams. The on-demand path is for "I want a starting point, let me
+   * polish it" teams.
    */
   @callable()
-  async draftWithAI(args: {
+  async draftReply(args: {
     ticketId: string;
     actorUserId: string;
-  }): Promise<{ ok: boolean; error?: string }> {
+  }): Promise<{ ok: boolean; subject?: string; body?: string; error?: string }> {
     const t = await this.env.DB.prepare(
-      `SELECT id, mailbox_id, requester_email, subject FROM ticket WHERE id = ? AND workspace_id = ?`,
+      `SELECT id, requester_email, subject FROM ticket WHERE id = ? AND workspace_id = ?`,
     )
       .bind(args.ticketId, this.state.workspaceId)
-      .first<{ id: string; mailbox_id: string; requester_email: string; subject: string }>();
+      .first<{ id: string; requester_email: string; subject: string }>();
     if (!t) return { ok: false, error: 'ticket_not_found' };
 
     const lastInbound = await this.env.DB.prepare(
-      `SELECT rfc_message_id, in_reply_to, from_address, subject, preview, raw_r2_key
+      `SELECT from_address, subject, preview
          FROM message_index
         WHERE ticket_id = ? AND direction = 'inbound'
         ORDER BY sent_at DESC LIMIT 1`,
     )
       .bind(args.ticketId)
-      .first<{
-        rfc_message_id: string | null;
-        in_reply_to: string | null;
-        from_address: string | null;
-        subject: string | null;
-        preview: string | null;
-        raw_r2_key: string | null;
-      }>();
+      .first<{ from_address: string | null; subject: string | null; preview: string | null }>();
     if (!lastInbound) return { ok: false, error: 'no_inbound_message_to_draft_from' };
 
-    const mailbox = await this.env.DB.prepare(
-      `SELECT address, reply_signing_secret FROM mailbox WHERE id = ?`,
-    )
-      .bind(t.mailbox_id)
-      .first<{ address: string; reply_signing_secret: string }>();
-    if (!mailbox) return { ok: false, error: 'mailbox_not_found' };
-
-    const messageId = ids.message();
-    const payload: InboundEmailPayload = {
-      mailboxId: t.mailbox_id,
-      mailboxAddress: mailbox.address,
-      replySigningSecret: mailbox.reply_signing_secret,
-      existingTicketId: args.ticketId,
-      from: { address: lastInbound.from_address ?? t.requester_email },
-      to: [mailbox.address],
-      cc: [],
-      subject: lastInbound.subject ?? t.subject,
-      text: lastInbound.preview ?? '',
-      messageId: lastInbound.rfc_message_id ?? `${messageId}@local`,
-      inReplyTo: lastInbound.in_reply_to ?? undefined,
-      references: [],
-      isAutoReply: false,
-      rawKey: lastInbound.raw_r2_key ?? '',
-      receivedAt: Date.now(),
-      attachmentCount: 0,
-    };
-    await this.schedule(0, 'triageAndDraft', { ticketId: args.ticketId, messageId, payload });
-    await audit(this.env, {
-      workspaceId: this.state.workspaceId,
-      ticketId: args.ticketId,
-      actorType: 'user',
-      actorId: args.actorUserId,
-      action: 'ai_draft.requested',
-    });
-    return { ok: true };
+    try {
+      const cfg = await this.workspaceConfig();
+      const knowledge = await searchKnowledge(
+        this.env,
+        this.state.workspaceId,
+        `${lastInbound.subject ?? t.subject}\n${lastInbound.preview ?? ''}`,
+      );
+      const draft = await runDraft({
+        env: this.env,
+        workspaceId: this.state.workspaceId,
+        ticketId: args.ticketId,
+        customerMessage: lastInbound.preview ?? '',
+        customerName: undefined,
+        knowledge,
+        workspaceConfig: cfg,
+      });
+      await audit(this.env, {
+        workspaceId: this.state.workspaceId,
+        ticketId: args.ticketId,
+        actorType: 'user',
+        actorId: args.actorUserId,
+        action: 'ai_draft.suggested',
+      });
+      const reSubject = `Re: ${(lastInbound.subject ?? t.subject).replace(/^(re:\s*)+/i, '')}`;
+      return { ok: true, subject: reSubject, body: draft.body_markdown };
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? 'draft_failed' };
+    }
   }
 
   /**

@@ -65,7 +65,7 @@ export const API = {
       body: JSON.stringify({ body, subject }),
     }),
   draftWithAI: (id: string) =>
-    api<{ ok: boolean; error?: string }>(`/api/tickets/${id}/draft`, { method: 'POST' }),
+    api<{ ok: boolean; subject?: string; body?: string; error?: string }>(`/api/tickets/${id}/draft`, { method: 'POST' }),
   setTicketAiDrafts: (id: string, enabled: boolean | null) =>
     api(`/api/tickets/${id}/ai-drafts`, { method: 'POST', body: JSON.stringify({ enabled }) }),
   workspaceSettings: () =>
