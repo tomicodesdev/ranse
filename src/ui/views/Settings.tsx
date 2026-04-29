@@ -17,6 +17,7 @@ export function SettingsView() {
   const [llmConfig, setLlmConfig] = useState<any[]>([]);
   const [aiDraftsEnabled, setAiDraftsEnabled] = useState(false);
   const [fromName, setFromName] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [profile, setProfile] = useState({ name: '', email: '', signature_markdown: '', avatar_url: '' });
   const [saved, setSaved] = useState('');
@@ -31,6 +32,7 @@ export function SettingsView() {
     setProviders(p.providers ?? []);
     setLlmConfig(l.config ?? []);
     setAiDraftsEnabled(!!w.ai_drafts_enabled);
+    setWorkspaceName(w.workspace_name ?? '');
     setFromName(w.from_name ?? '');
     setLogoUrl(w.logo_url ?? '');
     setProfile({
@@ -63,13 +65,18 @@ export function SettingsView() {
           <input
             type="text"
             value={fromName}
-            placeholder="Acme Support"
+            placeholder={workspaceName || 'Acme Support'}
             onChange={(e) => setFromName(e.target.value)}
             onBlur={async () => {
               await API.setWorkspaceSettings({ from_name: fromName });
               flashSaved();
             }}
           />
+          {!fromName && workspaceName && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Falling back to workspace name: <strong>{workspaceName}</strong>
+            </div>
+          )}
         </div>
         <div className="field">
           <label>Logo URL</label>

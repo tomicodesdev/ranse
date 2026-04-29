@@ -60,10 +60,14 @@ setupApp.post('/bootstrap', async (c) => {
   const slug = body.workspace_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 40) || 'workspace';
   const pwHash = await hashPassword(body.admin_password);
 
+  // Seed settings_json with from_name = workspace_name. The runtime falls
+  // back to workspace.name anyway, but seeding it makes the Settings UI
+  // input show a real value instead of looking empty.
+  const initialSettings = JSON.stringify({ from_name: body.workspace_name });
   await c.env.DB.batch([
     c.env.DB.prepare(
-      `INSERT INTO workspace (id, name, slug, settings_json, created_at) VALUES (?, ?, ?, '{}', ?)`,
-    ).bind(workspaceId, body.workspace_name, slug, now),
+      `INSERT INTO workspace (id, name, slug, settings_json, created_at) VALUES (?, ?, ?, ?, ?)`,
+    ).bind(workspaceId, body.workspace_name, slug, initialSettings, now),
     c.env.DB.prepare(
       `INSERT INTO user (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)`,
     ).bind(userId, body.admin_email.toLowerCase(), body.admin_name ?? null, pwHash, now),
