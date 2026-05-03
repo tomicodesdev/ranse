@@ -138,9 +138,9 @@ export async function buildHtmlWithSignature(
 
   let signatureHtml = '';
   if (ctx.agentSignatureMarkdown) {
-    signatureHtml = `<div style="margin-top:24px;padding-top:12px;border-top:1px solid #eee;color:#555;font-size:14px;">${markdownToHtml(ctx.agentSignatureMarkdown)}</div>`;
+    signatureHtml = `<div style="margin-top:48px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;">${markdownToHtml(ctx.agentSignatureMarkdown)}</div>`;
   } else if (name || sub || avatar) {
-    signatureHtml = `<table style="margin-top:24px;padding-top:12px;border-top:1px solid #eee;color:#555;font-size:14px;" cellspacing="0" cellpadding="0"><tr>${
+    signatureHtml = `<table style="margin-top:48px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;" cellspacing="0" cellpadding="0"><tr>${
       avatar
         ? `<td style="padding-right:10px;vertical-align:middle"><img src="${avatar}" width="40" height="40" alt="${escapeHtml(name)}" style="border-radius:50%;display:block"></td>`
         : ''
