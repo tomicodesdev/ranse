@@ -138,7 +138,6 @@ export const API = {
     api(`/api/notifications/channels/${id}`, { method: 'DELETE' }),
   testNotificationChannel: (id: string) =>
     api<{ ok: boolean }>(`/api/notifications/channels/${id}/test`, { method: 'POST' }),
-  approvals: () => api<any>('/api/approvals'),
   approve: (id: string, edits?: any) =>
     api(`/api/approvals/${id}/approve`, { method: 'POST', body: JSON.stringify({ edits }) }),
   reject: (id: string, reason?: string) =>

@@ -4,15 +4,13 @@ import { SetupView } from './views/Setup';
 import { LoginView } from './views/Login';
 import { InboxView } from './views/Inbox';
 import { TicketView } from './views/Ticket';
-import { ApprovalsView } from './views/Approvals';
 import { SettingsView } from './views/Settings';
 
-type Route = { name: 'inbox' } | { name: 'ticket'; id: string } | { name: 'approvals' } | { name: 'settings' };
+type Route = { name: 'inbox' } | { name: 'ticket'; id: string } | { name: 'settings' };
 
 function parseRoute(): Route {
   const path = window.location.pathname;
   if (path.startsWith('/t/')) return { name: 'ticket', id: path.slice(3) };
-  if (path === '/approvals') return { name: 'approvals' };
   if (path === '/settings') return { name: 'settings' };
   return { name: 'inbox' };
 }
@@ -62,9 +60,6 @@ export function App() {
           <a href="/" className={route.name === 'inbox' ? 'active' : ''} onClick={(e) => { e.preventDefault(); navigate('/'); }}>
             Inbox
           </a>
-          <a href="/approvals" className={route.name === 'approvals' ? 'active' : ''} onClick={(e) => { e.preventDefault(); navigate('/approvals'); }}>
-            Approvals
-          </a>
           <a href="/settings" className={route.name === 'settings' ? 'active' : ''} onClick={(e) => { e.preventDefault(); navigate('/settings'); }}>
             Settings
           </a>
@@ -79,7 +74,6 @@ export function App() {
       <main className="main">
         {route.name === 'inbox' && <InboxView onOpen={(id) => navigate(`/t/${id}`)} />}
         {route.name === 'ticket' && <TicketView id={route.id} onBack={() => navigate('/')} />}
-        {route.name === 'approvals' && <ApprovalsView onOpenTicket={(id) => navigate(`/t/${id}`)} />}
         {route.name === 'settings' && <SettingsView />}
       </main>
     </div>

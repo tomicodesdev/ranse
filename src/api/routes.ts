@@ -352,13 +352,6 @@ apiApp.post('/notifications/channels/:id/test', async (c) => {
   }
 });
 
-apiApp.get('/approvals', async (c) => {
-  const s = c.get('session');
-  const stub = await getSupervisor(c.env, s.workspaceId);
-  const approvals = await (stub as any).listApprovals();
-  return c.json({ approvals });
-});
-
 apiApp.post('/approvals/:id/approve', async (c) => {
   const s = c.get('session');
   const body = z

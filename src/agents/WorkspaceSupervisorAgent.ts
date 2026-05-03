@@ -617,16 +617,6 @@ export class WorkspaceSupervisorAgent extends Agent<Env, SupervisorState> {
   }
 
   @callable()
-  async listApprovals(): Promise<any[]> {
-    const rows = await this.env.DB.prepare(
-      `SELECT * FROM approval_request WHERE workspace_id = ? AND status = 'pending' ORDER BY created_at DESC`,
-    )
-      .bind(this.state.workspaceId)
-      .all();
-    return rows.results ?? [];
-  }
-
-  @callable()
   async approveAndSend(args: { approvalId: string; actorUserId: string; edits?: { subject?: string; body_markdown?: string } }): Promise<{ ok: boolean; messageId?: string; error?: string }> {
     const row = await this.env.DB.prepare(
       `SELECT workspace_id, ticket_id, kind, proposed_json, status FROM approval_request WHERE id = ?`,
