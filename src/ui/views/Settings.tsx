@@ -59,7 +59,7 @@ export function SettingsView() {
       <h2>Workspace branding</h2>
       <div className="card">
         <p className="muted" style={{ marginBottom: 8 }}>
-          Shown on outbound replies as the From-header display name and the HTML email header logo.
+          From-header display name on outbound replies. The logo is uploaded to your R2 bucket — handy for BIMI/Gravatar setup so it appears in Gmail's sender avatar (the email body itself stays clean, no inline header).
         </p>
         <div className="field">
           <label>From name</label>

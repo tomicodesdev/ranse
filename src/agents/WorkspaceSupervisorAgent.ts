@@ -146,7 +146,7 @@ export class WorkspaceSupervisorAgent extends Agent<Env, SupervisorState> {
       }>();
     if (!ctx) throw new Error('ticket_not_found');
 
-    let workspaceSettings: { from_name?: string; logo_url?: string } = {};
+    let workspaceSettings: { from_name?: string } = {};
     try {
       workspaceSettings = JSON.parse(ctx.workspace_settings || '{}');
     } catch {
@@ -222,7 +222,6 @@ export class WorkspaceSupervisorAgent extends Agent<Env, SupervisorState> {
       agentSignatureMarkdown: agent?.signature_markdown ?? null,
       agentAvatarUrl: agent?.avatar_url ?? null,
       workspaceName: ctx.workspace_name,
-      workspaceLogoUrl: workspaceSettings.logo_url ?? null,
       fromName,
     };
     const textBody = buildPlainTextWithSignature(args.body, signatureCtx);

@@ -98,7 +98,6 @@ export interface SignatureCtx {
   agentSignatureMarkdown?: string | null;
   agentAvatarUrl?: string | null;
   workspaceName?: string | null;
-  workspaceLogoUrl?: string | null;
   fromName?: string | null;
 }
 
@@ -118,10 +117,12 @@ export function buildPlainTextWithSignature(body: string, ctx: SignatureCtx): st
 }
 
 /**
- * Build the HTML alternative for a reply. Logo at the top (if set),
- * the body rendered from markdown, and an agent signature block with
- * avatar / name. Uses inline styles only (some clients strip <style>),
- * scoped enough to render reasonably in Gmail / Outlook / Apple Mail.
+ * Build the HTML alternative for a reply: body rendered from markdown,
+ * then an agent signature block with avatar / name. No workspace logo
+ * inline — Gmail/Outlook show the sender avatar from BIMI/Gravatar, and
+ * embedding it in the body just duplicates branding awkwardly.
+ * Uses inline styles only (some clients strip <style>), scoped enough
+ * to render reasonably in Gmail / Outlook / Apple Mail.
  */
 export async function buildHtmlWithSignature(
   bodyMarkdown: string,
@@ -151,11 +152,7 @@ export async function buildHtmlWithSignature(
     }</td></tr></table>`;
   }
 
-  const logoHtml = ctx.workspaceLogoUrl
-    ? `<div style="margin-bottom:16px"><img src="${ctx.workspaceLogoUrl}" alt="${escapeHtml(ctx.workspaceName ?? '')}" style="max-height:40px;display:block"></div>`
-    : '';
-
-  return `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#222;line-height:1.5;max-width:640px;margin:0;padding:0">${logoHtml}${bodyHtml}${signatureHtml}</body></html>`;
+  return `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#222;line-height:1.5;max-width:640px;margin:0;padding:0">${bodyHtml}${signatureHtml}</body></html>`;
 }
 
 /**
