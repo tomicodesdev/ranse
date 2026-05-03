@@ -14,6 +14,7 @@ import { runTriage } from './specialists/triage';
 import { runDraft } from './specialists/draft';
 import { searchKnowledge } from './specialists/knowledge';
 import type { AgentConfig } from '../llm/config.types';
+import { emitEvent } from '../notifications/dispatch';
 
 export interface SupervisorState {
   workspaceId: string;
@@ -382,6 +383,34 @@ export class WorkspaceSupervisorAgent extends Agent<Env, SupervisorState> {
       action: isNewTicket ? 'ticket.created' : 'ticket.message_received',
       payload: { messageId, from: payload.from.address, subject: payload.subject, isAutoReply: payload.isAutoReply },
     });
+
+    // Notification fan-out — auto-replies and bounces don't notify
+    // (would generate a notification storm during a vacation autoreply
+    // exchange). Real human inbound only.
+    if (!payload.isAutoReply) {
+      const preview = payload.text.slice(0, 280);
+      if (isNewTicket) {
+        await emitEvent(this.env, this.state.workspaceId, 'ticket.created', {
+          ticketId,
+          subject: payload.subject,
+          requesterEmail: payload.from.address,
+          requesterName: payload.from.name ?? null,
+          preview,
+          mailboxAddress: payload.mailboxAddress,
+          receivedAt: payload.receivedAt,
+        });
+      }
+      await emitEvent(this.env, this.state.workspaceId, 'message.inbound', {
+        ticketId,
+        messageId,
+        subject: payload.subject,
+        fromAddress: payload.from.address,
+        fromName: payload.from.name ?? null,
+        preview,
+        isReplyToExisting: !isNewTicket,
+        receivedAt: payload.receivedAt,
+      });
+    }
 
     if (!payload.isAutoReply && (await this.aiDraftsEnabled(ticketId))) {
       await this.schedule(0, 'triageAndDraft', { ticketId, messageId, payload });

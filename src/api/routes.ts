@@ -5,6 +5,9 @@ import type { Env } from '../env';
 import { getSession } from '../lib/auth';
 import { apiError } from '../lib/errors';
 import { r2Keys, putRaw } from '../lib/storage';
+import { ids } from '../lib/ids';
+import { EVENTS, EVENT_NAMES, type EventName } from '../notifications/events';
+import { CHANNEL_KINDS, getHandler, listHandlers } from '../notifications/channels';
 
 interface AuthedSession {
   sessionId: string;
@@ -196,6 +199,157 @@ apiApp.post('/me/profile', async (c) => {
   const stub = await getSupervisor(c.env, s.workspaceId);
   await (stub as any).setAgentProfile({ userId: s.userId, ...body });
   return c.json({ ok: true });
+});
+
+// Notification channels — workspace-scoped subscriptions that fan out
+// system events (ticket.created, message.inbound, ...) to delivery
+// targets (email address, Slack webhook URL, ...). The channel kinds
+// and event types come from the registries so this stays agnostic of
+// which kinds/events exist.
+apiApp.get('/notifications/meta', async (c) => {
+  return c.json({
+    events: EVENT_NAMES.map((name) => ({ name, description: EVENTS[name].desc })),
+    channels: listHandlers().map((h) => ({
+      kind: h.kind,
+      label: h.label,
+      description: h.description,
+      targetLabel: h.targetLabel,
+      targetPlaceholder: h.targetPlaceholder,
+    })),
+  });
+});
+
+apiApp.get('/notifications/channels', async (c) => {
+  const s = c.get('session');
+  const rows = await c.env.DB.prepare(
+    `SELECT id, kind, target, events, enabled, label, created_at
+       FROM notification_channel WHERE workspace_id = ?
+       ORDER BY created_at DESC`,
+  )
+    .bind(s.workspaceId)
+    .all<{ id: string; kind: string; target: string; events: string; enabled: number; label: string | null; created_at: number }>();
+  return c.json({
+    channels: (rows.results ?? []).map((r) => ({
+      ...r,
+      enabled: r.enabled === 1,
+      events: (() => {
+        try { return JSON.parse(r.events); } catch { return []; }
+      })(),
+    })),
+  });
+});
+
+apiApp.post('/notifications/channels', async (c) => {
+  const s = c.get('session');
+  const body = z
+    .object({
+      kind: z.enum(CHANNEL_KINDS as [string, ...string[]]),
+      target: z.string().min(1).max(2000),
+      events: z.array(z.enum(EVENT_NAMES as [EventName, ...EventName[]])).min(1),
+      label: z.string().max(100).optional(),
+      enabled: z.boolean().optional(),
+    })
+    .parse(await c.req.json());
+
+  const handler = getHandler(body.kind)!;
+  const validationError = handler.validateTarget(body.target);
+  if (validationError) return apiError(c, 'invalid_target', validationError);
+
+  const id = ids.message().replace(/^msg_/, 'nch_');
+  await c.env.DB.prepare(
+    `INSERT INTO notification_channel (id, workspace_id, kind, target, events, enabled, label, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      s.workspaceId,
+      body.kind,
+      body.target,
+      JSON.stringify(body.events),
+      body.enabled === false ? 0 : 1,
+      body.label ?? null,
+      Date.now(),
+    )
+    .run();
+  return c.json({ ok: true, id });
+});
+
+apiApp.patch('/notifications/channels/:id', async (c) => {
+  const s = c.get('session');
+  const id = c.req.param('id');
+  const body = z
+    .object({
+      enabled: z.boolean().optional(),
+      events: z.array(z.enum(EVENT_NAMES as [EventName, ...EventName[]])).min(1).optional(),
+      label: z.string().max(100).nullable().optional(),
+    })
+    .parse(await c.req.json());
+
+  const updates: string[] = [];
+  const binds: any[] = [];
+  if (body.enabled !== undefined) { updates.push('enabled = ?'); binds.push(body.enabled ? 1 : 0); }
+  if (body.events !== undefined) { updates.push('events = ?'); binds.push(JSON.stringify(body.events)); }
+  if (body.label !== undefined) { updates.push('label = ?'); binds.push(body.label); }
+  if (updates.length === 0) return c.json({ ok: true });
+
+  binds.push(id, s.workspaceId);
+  await c.env.DB.prepare(
+    `UPDATE notification_channel SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`,
+  )
+    .bind(...binds)
+    .run();
+  return c.json({ ok: true });
+});
+
+apiApp.delete('/notifications/channels/:id', async (c) => {
+  const s = c.get('session');
+  await c.env.DB.prepare(
+    `DELETE FROM notification_channel WHERE id = ? AND workspace_id = ?`,
+  )
+    .bind(c.req.param('id'), s.workspaceId)
+    .run();
+  return c.json({ ok: true });
+});
+
+// Synthesize a `ticket.created` event and deliver it through the channel
+// inline (not via the queue, so the user sees errors directly). Uses a
+// fixed test payload so it's clear this isn't a real ticket.
+apiApp.post('/notifications/channels/:id/test', async (c) => {
+  const s = c.get('session');
+  const row = await c.env.DB.prepare(
+    `SELECT kind, target FROM notification_channel WHERE id = ? AND workspace_id = ?`,
+  )
+    .bind(c.req.param('id'), s.workspaceId)
+    .first<{ kind: string; target: string }>();
+  if (!row) return apiError(c, 'not_found', 'Channel not found.');
+  const handler = getHandler(row.kind);
+  if (!handler) return apiError(c, 'unknown_kind', `Unknown channel kind: ${row.kind}`);
+
+  const mailbox = await c.env.DB.prepare(
+    `SELECT address FROM mailbox WHERE workspace_id = ? LIMIT 1`,
+  )
+    .bind(s.workspaceId)
+    .first<{ address: string }>();
+
+  try {
+    await handler.deliver(c.env, row.target, {
+      name: 'ticket.created',
+      workspaceId: s.workspaceId,
+      emittedAt: Date.now(),
+      payload: {
+        ticketId: 'test_ticket',
+        subject: 'Hello from Ranse',
+        requesterEmail: 'sender@example.com',
+        requesterName: 'Test Sender',
+        preview: 'This is a test notification — your channel is wired up correctly.',
+        mailboxAddress: mailbox?.address ?? 'support@example.com',
+        receivedAt: Date.now(),
+      },
+    });
+    return c.json({ ok: true });
+  } catch (e) {
+    return apiError(c, 'delivery_failed', e instanceof Error ? e.message : String(e));
+  }
 });
 
 apiApp.get('/approvals', async (c) => {

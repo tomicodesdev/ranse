@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { API } from '../api';
+import { NotificationsSection } from './NotificationsSection';
 
 const ACTIONS = ['triage', 'summarize', 'draft', 'knowledge_query', 'escalation', 'conversational'] as const;
 const PROVIDERS = ['openai', 'anthropic', 'google-ai-studio', 'grok', 'openrouter'];
@@ -174,25 +175,31 @@ export function SettingsView() {
         </div>
       </div>
 
-      <h2>AI auto-drafts</h2>
+      <h2>Preferences</h2>
       <div className="card">
-        <p className="muted" style={{ marginBottom: 8 }}>
-          When on, Ranse generates a suggested reply for every inbound email and posts it to the approvals queue for a human to review and send. When off, operators reply manually — but the "Suggest with AI" button on a ticket still works on demand.
-        </p>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={aiDraftsEnabled}
-            onChange={async (e) => {
-              const next = e.target.checked;
-              setAiDraftsEnabled(next);
-              await API.setWorkspaceSettings({ ai_drafts_enabled: next });
-              flashSaved();
-            }}
-          />
-          <span>Auto-draft replies for new inbound emails</span>
-        </label>
+        <div className="setting-row">
+          <div className="setting-info">
+            <div className="setting-label">Auto-draft replies</div>
+            <div className="setting-desc">
+              Generate a suggested reply for every inbound email and post it to the approvals queue for a human to review and send. When off, the "Suggest with AI" button on a ticket still works on demand.
+            </div>
+          </div>
+          <div className="setting-control">
+            <input
+              type="checkbox"
+              checked={aiDraftsEnabled}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setAiDraftsEnabled(next);
+                await API.setWorkspaceSettings({ ai_drafts_enabled: next });
+                flashSaved();
+              }}
+            />
+          </div>
+        </div>
       </div>
+
+      <NotificationsSection onSaved={flashSaved} />
 
       <h2>LLM providers (BYOK)</h2>
       <div className="card">

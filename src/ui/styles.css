@@ -45,7 +45,8 @@ button.primary:hover { filter: brightness(1.08); }
 button.danger { color: var(--danger); border-color: var(--danger); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-input, textarea, select {
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+textarea, select {
   font: inherit;
   color: var(--text);
   background: var(--bg-soft);
@@ -54,6 +55,7 @@ input, textarea, select {
   padding: 8px 10px;
   width: 100%;
 }
+input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
 input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: var(--accent);
@@ -194,6 +196,21 @@ a:hover { text-decoration: underline; }
 
 .row { display: flex; gap: 12px; align-items: center; }
 .row > * { flex: 1; }
+
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 0;
+}
+.setting-row + .setting-row { border-top: 1px solid var(--border); }
+.setting-row:first-child { padding-top: 4px; }
+.setting-row:last-child { padding-bottom: 4px; }
+.setting-row .setting-info { flex: 1; min-width: 0; }
+.setting-row .setting-label { font-weight: 500; font-size: 14px; margin-bottom: 2px; }
+.setting-row .setting-desc { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.setting-row .setting-control { flex-shrink: 0; padding-top: 4px; }
 .muted { color: var(--text-muted); font-size: 12px; }
 h1 { font-size: 20px; margin: 0 0 16px; }
 h2 { font-size: 16px; margin: 24px 0 10px; }

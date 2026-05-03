@@ -18,6 +18,7 @@ import { authApp } from './auth/routes';
 import { apiApp } from './api/routes';
 import { assetsApp } from './assets/routes';
 import type { InboundEmailPayload } from './agents/WorkspaceSupervisorAgent';
+import { getHandler } from './notifications/channels';
 
 export { WorkspaceSupervisorAgent } from './agents/WorkspaceSupervisorAgent';
 export { MailboxAgent } from './agents/MailboxAgent';
@@ -162,6 +163,12 @@ export default {
               body: JSON.stringify(body.payload),
             });
             if (!res.ok) throw new Error(`webhook ${res.status}`);
+            break;
+          }
+          case 'notification.deliver': {
+            const handler = getHandler(body.kind);
+            if (!handler) throw new Error(`unknown channel kind: ${body.kind}`);
+            await handler.deliver(env, body.target, body.event);
             break;
           }
           default:

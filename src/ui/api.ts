@@ -103,6 +103,41 @@ export const API = {
     api('/api/me/profile', { method: 'POST', body: JSON.stringify(profile) }),
   uploadWorkspaceLogo: (file: File) => uploadFile('/api/uploads/workspace-logo', file),
   uploadAvatar: (file: File) => uploadFile('/api/uploads/avatar', file),
+  notificationsMeta: () =>
+    api<{
+      events: { name: string; description: string }[];
+      channels: {
+        kind: string;
+        label: string;
+        description: string;
+        targetLabel: string;
+        targetPlaceholder: string;
+      }[];
+    }>('/api/notifications/meta'),
+  listNotificationChannels: () =>
+    api<{
+      channels: {
+        id: string;
+        kind: string;
+        target: string;
+        events: string[];
+        enabled: boolean;
+        label: string | null;
+        created_at: number;
+      }[];
+    }>('/api/notifications/channels'),
+  createNotificationChannel: (body: {
+    kind: string;
+    target: string;
+    events: string[];
+    label?: string;
+  }) => api<{ ok: boolean; id: string }>('/api/notifications/channels', { method: 'POST', body: JSON.stringify(body) }),
+  updateNotificationChannel: (id: string, body: { enabled?: boolean; events?: string[]; label?: string | null }) =>
+    api(`/api/notifications/channels/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteNotificationChannel: (id: string) =>
+    api(`/api/notifications/channels/${id}`, { method: 'DELETE' }),
+  testNotificationChannel: (id: string) =>
+    api<{ ok: boolean }>(`/api/notifications/channels/${id}/test`, { method: 'POST' }),
   approvals: () => api<any>('/api/approvals'),
   approve: (id: string, edits?: any) =>
     api(`/api/approvals/${id}/approve`, { method: 'POST', body: JSON.stringify({ edits }) }),
