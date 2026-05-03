@@ -79,17 +79,34 @@ export function SettingsView() {
           )}
         </div>
         <div className="field">
-          <label>Logo URL</label>
-          <input
-            type="url"
-            value={logoUrl}
-            placeholder="https://example.com/logo.png"
-            onChange={(e) => setLogoUrl(e.target.value)}
-            onBlur={async () => {
-              await API.setWorkspaceSettings({ logo_url: logoUrl });
-              flashSaved();
-            }}
-          />
+          <label>Logo</label>
+          <div className="row">
+            <input
+              type="url"
+              value={logoUrl}
+              placeholder="https://example.com/logo.png"
+              onChange={(e) => setLogoUrl(e.target.value)}
+              onBlur={async () => {
+                await API.setWorkspaceSettings({ logo_url: logoUrl });
+                flashSaved();
+              }}
+            />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const { url } = await API.uploadWorkspaceLogo(file);
+                setLogoUrl(url);
+                flashSaved();
+                e.target.value = '';
+              }}
+            />
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Paste a URL or upload an image (≤ 2MB, PNG/JPEG/WebP/GIF). Uploads are stored in your R2 bucket.
+          </div>
           {logoUrl && <img src={logoUrl} alt="Logo preview" style={{ maxHeight: 40, marginTop: 8 }} />}
         </div>
       </div>
@@ -113,17 +130,31 @@ export function SettingsView() {
           />
         </div>
         <div className="field">
-          <label>Avatar URL <span className="muted" style={{ fontSize: 12 }}>(falls back to Gravatar from {profile.email || 'your email'})</span></label>
-          <input
-            type="url"
-            value={profile.avatar_url}
-            placeholder="https://example.com/avatar.jpg"
-            onChange={(e) => setProfile({ ...profile, avatar_url: e.target.value })}
-            onBlur={async () => {
-              await API.setMyProfile({ avatar_url: profile.avatar_url });
-              flashSaved();
-            }}
-          />
+          <label>Avatar <span className="muted" style={{ fontSize: 12 }}>(falls back to Gravatar from {profile.email || 'your email'})</span></label>
+          <div className="row">
+            <input
+              type="url"
+              value={profile.avatar_url}
+              placeholder="https://example.com/avatar.jpg"
+              onChange={(e) => setProfile({ ...profile, avatar_url: e.target.value })}
+              onBlur={async () => {
+                await API.setMyProfile({ avatar_url: profile.avatar_url });
+                flashSaved();
+              }}
+            />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const { url } = await API.uploadAvatar(file);
+                setProfile((p) => ({ ...p, avatar_url: url }));
+                flashSaved();
+                e.target.value = '';
+              }}
+            />
+          </div>
           {profile.avatar_url && (
             <img src={profile.avatar_url} alt="Avatar preview" style={{ width: 40, height: 40, borderRadius: '50%', marginTop: 8, objectFit: 'cover' }} />
           )}

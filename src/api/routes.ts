@@ -4,6 +4,7 @@ import { getAgentByName } from 'agents';
 import type { Env } from '../env';
 import { getSession } from '../lib/auth';
 import { apiError } from '../lib/errors';
+import { r2Keys, putRaw } from '../lib/storage';
 
 interface AuthedSession {
   sessionId: string;
@@ -124,6 +125,56 @@ apiApp.post('/settings/workspace', async (c) => {
   const stub = await getSupervisor(c.env, s.workspaceId);
   await (stub as any).setWorkspaceSettings({ actorUserId: s.userId, ...body });
   return c.json({ ok: true });
+});
+
+// Image uploads land in R2 under `assets/...`, are served back unauthenticated
+// from /assets/* (so recipient mail clients can fetch them out of email HTML),
+// and the resulting absolute URL is persisted to settings_json / user.avatar_url
+// via the same agent methods the URL-input fields use. Limits:
+// - 2MB logo / 1MB avatar (mail clients don't load >2MB images well anyway)
+// - PNG/JPEG/WebP/GIF only (no SVG — embedded scripts)
+const ALLOWED_IMAGE_TYPES = /^image\/(png|jpeg|webp|gif)$/;
+
+async function readUploadedImage(c: any, maxBytes: number): Promise<{ bytes: ArrayBuffer; ext: string; contentType: string } | Response> {
+  const form = await c.req.formData();
+  const file = form.get('file');
+  if (!(file instanceof File)) return apiError(c, 'no_file', 'Attach an image file under the "file" field.');
+  if (file.size > maxBytes) {
+    return apiError(c, 'too_large', `Image must be under ${Math.round(maxBytes / 1024 / 1024)}MB.`);
+  }
+  const contentType = file.type || 'application/octet-stream';
+  if (!ALLOWED_IMAGE_TYPES.test(contentType)) {
+    return apiError(c, 'invalid_type', 'Use PNG, JPEG, WebP, or GIF.');
+  }
+  const ext = contentType.split('/')[1];
+  const bytes = await file.arrayBuffer();
+  return { bytes, ext, contentType };
+}
+
+apiApp.post('/uploads/workspace-logo', async (c) => {
+  const s = c.get('session');
+  const result = await readUploadedImage(c, 2 * 1024 * 1024);
+  if (result instanceof Response) return result;
+  const filename = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${result.ext}`;
+  const key = r2Keys.workspaceAsset(s.workspaceId, 'logo', filename);
+  await putRaw(c.env, key, result.bytes, result.contentType);
+  const url = `${new URL(c.req.url).origin}/${key}`;
+  const stub = await getSupervisor(c.env, s.workspaceId);
+  await (stub as any).setWorkspaceSettings({ actorUserId: s.userId, logo_url: url });
+  return c.json({ ok: true, url });
+});
+
+apiApp.post('/uploads/avatar', async (c) => {
+  const s = c.get('session');
+  const result = await readUploadedImage(c, 1 * 1024 * 1024);
+  if (result instanceof Response) return result;
+  const filename = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${result.ext}`;
+  const key = r2Keys.userAsset(s.workspaceId, s.userId, 'avatar', filename);
+  await putRaw(c.env, key, result.bytes, result.contentType);
+  const url = `${new URL(c.req.url).origin}/${key}`;
+  const stub = await getSupervisor(c.env, s.workspaceId);
+  await (stub as any).setAgentProfile({ userId: s.userId, avatar_url: url });
+  return c.json({ ok: true, url });
 });
 
 apiApp.get('/me/profile', async (c) => {

@@ -11,6 +11,10 @@ export const r2Keys = {
     `attachments/${workspaceId}/${ticketId}/${attachmentId}/${filename}`,
   export: (workspaceId: string, exportId: string) =>
     `exports/${workspaceId}/${exportId}.zip`,
+  workspaceAsset: (workspaceId: string, kind: 'logo', filename: string) =>
+    `assets/workspace/${workspaceId}/${kind}/${filename}`,
+  userAsset: (workspaceId: string, userId: string, kind: 'avatar', filename: string) =>
+    `assets/user/${workspaceId}/${userId}/${kind}/${filename}`,
 };
 
 export async function putRaw(

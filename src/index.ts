@@ -16,6 +16,7 @@ import { ids } from './lib/ids';
 import { setupApp } from './setup/wizard';
 import { authApp } from './auth/routes';
 import { apiApp } from './api/routes';
+import { assetsApp } from './assets/routes';
 import type { InboundEmailPayload } from './agents/WorkspaceSupervisorAgent';
 
 export { WorkspaceSupervisorAgent } from './agents/WorkspaceSupervisorAgent';
@@ -58,6 +59,7 @@ app.onError((err, c) => {
 app.route('/setup', setupApp);
 app.route('/auth', authApp);
 app.route('/api', apiApp);
+app.route('/assets', assetsApp);
 
 // Agents SDK handles /agents/* WebSocket + RPC. Falls through to static assets on null.
 app.all('/agents/*', async (c) => {

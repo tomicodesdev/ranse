@@ -13,6 +13,23 @@ export class ApiRequestError extends Error {
   }
 }
 
+async function uploadFile(path: string, file: File): Promise<{ ok: boolean; url: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(path, { method: 'POST', body: form, credentials: 'include' });
+  if (!res.ok) {
+    const body: any = await res.json().catch(() => ({ error: 'http_error', message: res.statusText }));
+    throw new ApiRequestError({
+      code: body?.error ?? 'http_error',
+      message: body?.message ?? `HTTP ${res.status}`,
+      status: res.status,
+      details: body?.details,
+      requestId: body?.requestId,
+    });
+  }
+  return res.json();
+}
+
 export async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -84,6 +101,8 @@ export const API = {
     ),
   setMyProfile: (profile: { name?: string; signature_markdown?: string; avatar_url?: string }) =>
     api('/api/me/profile', { method: 'POST', body: JSON.stringify(profile) }),
+  uploadWorkspaceLogo: (file: File) => uploadFile('/api/uploads/workspace-logo', file),
+  uploadAvatar: (file: File) => uploadFile('/api/uploads/avatar', file),
   approvals: () => api<any>('/api/approvals'),
   approve: (id: string, edits?: any) =>
     api(`/api/approvals/${id}/approve`, { method: 'POST', body: JSON.stringify({ edits }) }),
